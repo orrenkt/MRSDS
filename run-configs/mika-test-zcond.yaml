@@ -1,0 +1,94 @@
+data:
+  data_source: "mika"
+  trials: "all"  # alt: 'towers', 'visual'
+  tlim: null     # reject trials over tlim timepoints
+  inputs: 2      # 2 is default, will zero pad if not present
+  stages: False  # include trial stages as input
+  history: False # include previous trial history
+  hist_tlen: 0   # number of timepoints to include of previous trial 
+  #region: 1  # index of brain region to use in single region model.
+
+model:
+  uz: True  # pass inputs to discrete transition
+  sz: False # pass stages to discrete transition
+  xz: True  # pass continuous latents to discrete transition
+  ux: True  # pass inputs to continuous transition 
+  xic:
+    layers: [8] # 2nd layer has var size
+    activations: ["relu", null]
+    triangular_cov: False  # NOTE these were added after first run.
+    trainable_cov: False
+  xtransition:
+    triangular_cov: True
+    trainable_cov: True
+    zcond: True
+    dynamics:
+      communication_type: "additive" # alt "conditional"
+      input_type: "additive" # alt "conditional"
+      input_func_type: 'seperate' # alt: together
+      layers: [32, 32] # 3rd layer has var size
+      activations: ["relu", "relu", null]
+    inputs:
+      layers: [4] # 3rd layer has var size
+      activations: ["relu", null]
+  emissions:
+    triangular_cov: False
+    trainable_cov: True
+    dist: "gaussian"
+    layers: [128, 128]
+    activations: ["relu", "relu"]
+    final_activation: null # poisson alt: exp, softplus
+
+# NOTE we use a smaller inf net here for single region model.
+inference:
+  triangular_cov: True
+  trainable_cov: True
+  embedding: 
+    layers: [20, 10]
+    activations: ["relu", "relu"]
+  transformer: True
+  transformer_params:
+    head_size: 50
+    num_heads: 10
+    ff_dim: 10
+    num_transformer_blocks: 2
+    mlp_units: [45]
+  xic_inf:
+    layers: [16, null] # 2nd layer has var size
+    activations: ["relu", null]
+    xic_input_type: "hs"  # alt: ys, yes, hs for embeddings
+    xic_input_len: -1  # alt: 25
+  num_samples: 1  # number to use in evaluation
+    
+training:
+  dynamics_only: False  # Continue training dynamics only
+  smooth_coef: 0.1
+  batch_size: 64
+  xent: False 
+  xent_init: 0
+  xent_rate: 0.99
+  xent_steps: 150
+  xent_kickin_steps: 0
+  xentropy_annealing: True
+  flat_learning_rate: False
+  use_inverse_annealing_lr: False
+  num_steps: 1001 #5501
+  num_steps_do: 0 #5001 #001 #7001
+  learning_rate: 3.e-3
+  lr_warmup_steps: 100
+  lr_warmup_steps_do: 0 #1000
+  beta_max: 3000.0
+  beta_warmup_steps: 1000
+  temperature_annealing: True
+  t_init: 0
+  t_min: 1.0
+  annealing_rate: 0.99
+  annealing_steps: 500
+  annealing_kickin_steps: 0
+  log_steps: 10 #0  # when to print elbo and eval perf
+  save_steps: 100 #500 #0 # when to checkpoint model, save progress
+  dropout: True
+  test_perc: 0.1
+  drop_perc: 0.25
+  dropout_trial_perc: 0.5
+  num_samples: 1

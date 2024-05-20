@@ -1,0 +1,97 @@
+
+data:
+  data_source: "double-well-2smoothnew"
+  trials: "all"  # alt: 'towers', 'visual'
+  tlim: null  # reject trials over tlim timepoints
+  inputs: 2     # 2 is default, will zero pad if not present
+  stages: False  # include trial stages as input
+  history: False # include previous trial history
+  hist_tlen: 1 #15  # number of timepoints to include of previous trial 
+  #accum_only: True
+  history_effect: False
+  nle: False #True
+
+model:
+  uz: True  # pass inputs to discrete transition
+  sz: False # pass stages to discrete transition
+  xz: True  # pass continuous latents to discrete transition
+  ux: True  # pass inputs to continuous transition 
+  xic:
+    triangular_cov: False #True  # NOTE these were added after first run.
+    trainable_cov: False
+    layers: [4] # 3rd layer has var size
+    activations: ["relu", null]
+  xtransition:
+    zcond: True #True
+    triangular_cov: True
+    trainable_cov: True
+    dynamics:
+      communication_type: "additive" # alt "conditional"
+      input_type: "additive" # alt "conditional"
+      input_func_type: 'seperate' # alt: together
+      layers: [32, 32] # 3rd layer has var size
+      activations: ["relu", "relu", null] # "relu"
+    inputs:
+      layers: [] # final layer has var size
+      activations: [null]
+  emissions:
+    triangular_cov: False
+    trainable_cov: True
+    dist: "gaussian"
+    layers: []
+    activations: [] #'relu']
+    final_activation: null # poisson alt: exp, softplus
+
+inference:
+  triangular_cov: False #True
+  trainable_cov: True
+  transformer: True
+  embedding: 
+    layers: [8]
+    activations: ["relu"]
+  transformer_params:
+    head_size: 35
+    num_heads: 3
+    ff_dim: 4
+    num_transformer_blocks: 1
+    mlp_units: [32]
+  xic_inf:
+    layers: [8, null] # 2nd layer has var size
+    activations: ["relu", null]
+    xic_input_type: "hs"  # alt: ys, yes, hs for embeddings
+    xic_input_len: -1 #25  # alt: -1
+  num_samples: 1  # number to use in evaluation
+   
+training:
+  use_true_x: False
+  use_true_z: False
+  dynamics_only: True  # Continue training dynamics only
+  batch_size: 64
+  xent: False 
+  xent_init: 0
+  xent_rate: 0.99
+  xent_steps: 100
+  xent_kickin_steps: 0
+  xentropy_annealing: True
+  flat_learning_rate: False
+  use_inverse_annealing_lr: False
+  num_steps: 2001 #31 #3001 
+  num_steps_do: 3001 #16 #1501
+  learning_rate: 1.e-2
+  lr_warmup_steps: 500 #20 #2000
+  lr_warmup_steps_do: 500 #10 #1000
+  beta_max: 100.0
+  beta_warmup_steps: 100
+  temperature_annealing: True
+  t_init: 0
+  t_min: 1.0
+  annealing_rate: 0.99
+  annealing_steps: 100
+  annealing_kickin_steps: 0
+  log_steps: 500 #500   # when to print elbo and eval perf
+  save_steps: 500 #1000 #1000 # when to checkpoint model, save progress
+  dropout: False
+  test_perc: 0.1
+  drop_perc: 0.25
+  dropout_trial_perc: 0.5
+  num_samples: 1

@@ -1,0 +1,116 @@
+data:
+  data_source: "mydata"
+  tlim: null  # reject trials over tlim timepoints
+  inputs: 2   # us input length. 2 is default, will zero pad if no inputs are provided
+ 
+model:
+  uz: False  # pass inputs (us) to discrete transition
+  sz: False  # pass trial stages to discrete transition (if stages provided)
+  xz: True   # pass continuous latents (xs) to discrete transition p(z|z,x)
+  ux: True   # pass inputs (ux) to continuous transition p(x|x,u) 
+  xic:
+    layers: [8] # final layer has var size equal to latent x dim
+    activations: ["relu", null]
+    triangular_cov: False  # NOTE these were added after first run.
+    trainable_cov: True
+  xtransition:
+    # For switching dynamics. If zcond True, uses single x dynamics net with
+    # z as conditioning input. If False, uses k (number discrete states) dynamics networks
+    # Using zcond means fewer model parameters and sometimes works better for k>1.
+    zcond: True
+    triangular_cov: False
+    trainable_cov: True
+    dynamics:
+      # Communication can be additive, additive-linear, or conditional
+      # additive (default): x^k_{t+1} = f_{kk}(x^k_t) + f_{kj}(x^j_t) + noise
+      # additive-linear: same, but f_{kj} is linear
+      # conditional: x^k_{t+1} = f_{kk}(x^k_t) + ff_{kj}(x^k_t, x^j_t) + noise
+      # in conditional the communication is conditioned on local activity x^k
+      # note this is underconstrained / harder to interpret since both are now function of x^k
+      communication_type: "additive" # alt: additive-linear, conditional
+      # Same as for dynamics. Additive means f_{ku}(u_t), conditional means f_{ku}(x^k_t, u_t)
+      input_type: "additive" # alt: conditional
+      # seperate inputs means we learn a seperate additive function f_{ku} for each input.
+      # this is important if you want to get seperate messages from each input,
+      # otherwise they are combined.
+      input_func_type: 'seperate' # alt: together
+      # Final dynamics layer gets variable size equal to latent dim x^k, no need to specify
+      # here. we do specify the nonlinearity, null (ie linear layer) by default
+      # to allow negative x values.
+      layers: [32, 32] # 3rd layer has var size
+      activations: ["relu", "relu", null]
+    inputs:
+      layers: [4] # Final layer has var size
+      activations: ["relu", null]
+  emissions:
+    triangular_cov: False
+    trainable_cov: True
+    dist: "gaussian"
+    layers: [128, 128]
+    activations: ["relu", "relu"]
+    final_activation: null # poisson alt: exp, softplus
+
+inference:
+  triangular_cov: False
+  trainable_cov: True
+  embedding: # To embed each region's observations before input to transformer encoder 
+    layers: [20, 10]
+    activations: ["relu", "relu"]
+  transformer: True
+  transformer_params:
+    head_size: 50
+    num_heads: 10
+    ff_dim: 10
+    num_transformer_blocks: 2
+    mlp_units: [45]
+  num_samples: 1  # Number of posterior samples to use in inference call
+    
+training:
+  batch_size: 64
+  # Set to True only for mean field (mrsds) inference.
+  # Continues training dynamics only with frozen inference net (better dynamics, generation)
+  # The params num_steps_do, lr_warmup_steps_do specify training for this second stage.
+  dynamics_only: False
+  # For neural data, we set a small smoothness penalty on the latents.
+  smooth_coef: 0.1
+  # Will depend on your data. 1e-2 will work well for small datasets
+  # For larger datsets a lower lr and more iterations will work better, eg 1e-3:5e-3
+  num_steps: 15001
+  num_steps_do: 0
+  learning_rate: 3.e-3 
+  # Warmup steps for learning rate, we use a linear ramp up to max lr, followed by
+  # exponential fallout. Best to set as fraction of num_steps. As rule of thumb set this
+  # between 1/4 for low steps and 1/10 for high overall steps
+  # eg 500 for 2000 steps, 1000-2000 for 15000 steps
+  lr_warmup_steps: 1000
+  lr_warmup_steps_do: 0 #1000
+  # For mean field inference only. Temperature is applied to discrete transition
+  # z_t ~ Softmax( p(z[t] | z[t-1], x[t-1]) / temp)
+  # This gets annealed over the course of training. Increasing temperature 
+  # increases the posterior entropy over discrete states, want to encourage use
+  # of all states early in training.
+  temperature_annealing: True
+  t_init: 0
+  t_min: 1.0
+  annealing_rate: 0.99
+  annealing_steps: 500
+  annealing_kickin_steps: 0
+  # for structured inference only (svae, s-svae), this param is ignored by mean field.
+  # beta max sets highest value of beta, which upweights likelihood vs reconstruction
+  # term in elbo. this roughly serves a similar purpose as second stage of dynamics training
+  # for mean field inference. beta is annealed to 1 over training. the right beta level
+  # will depend on your data, use a larger beta for datasets with more neurons.
+  # eg 100 for small toy dataset, 1000-5000 for bigger dataset.
+  # note that setting beta high can result in worse cosmoothing results, but better generation
+  beta_max: 3000.0
+  beta_warmup_steps: 1000
+  # Can set these higher (eg 1k+) for longer training models, and log more often than save
+  log_steps: 500 # How often to evaluate perf, print to log. Also tracks over training. 
+  save_steps: 1000 # How often to checkpoint model, eval latents etc and save to latents.mat
+  # Whether to run dropout training, which approximates cosmoothing.
+  # This improves cosmoothing performance and generally better for real datasets
+  # may not matter much for small toy datasets
+  dropout: True
+  test_perc: 0.1
+  drop_perc: 0.25
+  dropout_trial_perc: 0.5

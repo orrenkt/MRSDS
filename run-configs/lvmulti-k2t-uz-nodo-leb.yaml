@@ -1,0 +1,102 @@
+
+data:
+  data_source: "lv-multiswitch2"
+  #split_obs: True
+  trials: "all"  # alt: 'towers', 'visual'
+  tlim: null  # reject trials over tlim timepoints
+  inputs: 2     # 2 is default, will zero pad if not present
+  stages: False  # include trial stages as input
+  history: False # include previous trial history
+  hist_tlen: 0  # number of timepoints to include of previous trial 
+  num_trials: 500
+  random_zic: False
+  uz: False  # input = z
+  nle: False  # nonlinear (relu) emissions
+  #nle_type: 'gaussian_bump'
+  #regime: 0  # first of the two LV dynamics regimes only. Alt: 1, or don't include
+
+# dzr no ic net. 6062 params.
+
+model:
+  uz: True  # pass inputs to discrete transition
+  sz: False # pass stages to discrete transition
+  xz: False  # pass continuous latents to discrete transition
+  ux: False  # pass inputs to continuous transition 
+  xic:
+    layers: [2] # 3rd layer has var size   # Before this was [8,4]
+    activations: ["relu", null]  #["relu", "relu", null]
+    triangular_cov: False
+    trainable_cov: False
+  ztransition:
+    layer_mult: 1
+  xtransition:              # dzr triangularcov, trainable.
+    triangular_cov: True
+    trainable_cov: True
+    zcond: False #True
+    no_us_input: True
+    dynamics:
+      single_region_latent: True
+      communication_type: "additive" # alt "conditional"
+      input_type: "additive" # alt "conditional"
+      input_func_type: 'seperate' # alt: together
+      layers: [32, 32] # 3rd layer has var size    # dzr 32, 32
+      activations: ["relu", "relu", null] # "relu"
+    inputs:
+      layers: [] # final layer has var size
+      activations: [null]
+  emissions:   # dzr tricov false, trainable false
+    triangular_cov: False
+    trainable_cov: False
+    dist: "gaussian"
+    layers: [] #16
+    activations: [null] #'relu']
+    final_activation: null # poisson alt: exp, softplus
+
+inference:
+  triangular_cov: False
+  trainable_cov: True
+  transformer: True
+  embedding: 
+    layers: [6]
+    activations: ["relu"]
+  transformer_params:
+    head_size: 50
+    num_heads: 3
+    ff_dim: 4
+    num_transformer_blocks: 1
+    mlp_units: [32]
+  num_samples: 1  # number to use in evaluation
+   
+training:
+  use_true_x: False
+  use_true_z: False
+  dynamics_only: False  # Continue training dynamics only
+  batch_size: 64
+  xent: False 
+  xent_init: 0
+  xent_rate: 0.99
+  xent_steps: 50
+  xent_kickin_steps: 0
+  xentropy_annealing: True
+  flat_learning_rate: False
+  use_inverse_annealing_lr: False
+  num_steps: 20001   # dzr 5k steps?
+  num_steps_do: 0 #20001
+  learning_rate: 1.e-2
+  lr_warmup_steps: 1500   # dzr 1k
+  lr_warmup_steps_do: 0 #1000
+  beta_max: 100.0
+  beta_warmup_steps: 1000
+  temperature_annealing: True
+  t_init: 0
+  t_min: 1.0
+  annealing_rate: 0.99
+  annealing_steps: 100
+  annealing_kickin_steps: 0
+  log_steps: 500 #500   # when to print elbo and eval perf
+  save_steps: 500 #1000 #1000 # when to checkpoint model, save progress
+  dropout: False
+  test_perc: 0.1
+  drop_perc: 0.0 #0.25
+  dropout_trial_perc: 0.5 #0.15
+  num_samples: 1
