@@ -6,8 +6,8 @@ Modeling state-dependent communication between brain regions with switching nonl
 https://openreview.net/forum?id=WQwV7Y8qwa
 
 To install MRSDS and its requirements: \
-1 - clone this repo and run `bash create_conda_env.sh` to set up the enviornment and requirements
-    note that the cudatoolkit and cudnn versions will need to be appropriate for your system
+1 - clone this repo and run `bash create_conda_env.sh` to set up the enviornment and requirements \
+    Note that the cudatoolkit and cudnn versions will need to be appropriate for your system \
     This shell script creates a conda enviornment `tfp-gpu` which you'll need to activate to run mrsds.
 
 To run MRSDS on your data:
@@ -21,8 +21,8 @@ To run MRSDS on your data:
 
 2 - Add your data source name to `load_prep_data()` in `utils_data.py`. This name will also go in your config.
 
-3 - Create a config file in the `run-configs` folder which specifies the dataset, model and training hyperparameters. \
-    see two included example configs for you to modify: \
+3 - Create a config file in the `run-configs` folder which specifies the dataset, model and training hyperparameters. 
+    See two included example configs for you to modify: \
     `toy-config.yaml` : good starting point for running on a small simulation \
     `large-config.yaml` : for a larger dataset with neural data.
 
@@ -37,7 +37,7 @@ To run MRSDS on your data:
      mrsds (mean field) can handle both and works better in some cases, but may be less good for \
      generation vs inference (eg cosmoothing). \
     -random seeds for the data loader, model initialization, and model training for reproducability.\
-     it's a good idea to add these seeds to the run name you specify but you don't have to. \
+     it's a good idea to add these seeds to the run name you specify but you don't have to. 
 
 ```
 python -u run_training.py -datapath /mydata -resultpath /myresults -configpath run-configs/my_config.yaml
@@ -50,12 +50,13 @@ python -u run_training.py -datapath /mydata -resultpath /myresults -configpath r
    `myrun-logs`    : directory with tensorflow logfile \
    `myrun-models`  : directory with tf model checkpoints needed to load trained model, see eg notebooks below \
    `myrun-models-do` : only created when using mean field (mrsds) inference, not svae or s-svae. \
-    -By default after regular training, the model is trained with the inference network frozen to ensure good dynamics generation \
-    these later checkpoints are put in a second directory. See config examples for how this second training stage is specified. \
-   `myrun_latents.mat` : a mat file with a dictionary of saved arrays. You can set how often this file is created during training \
+    -By default after regular training, the model is trained with the inference network frozen to ensure good dynamics generation.
+    These later checkpoints are put in a second directory. See config examples for how this second training stage is specified. \
+   `myrun_latents.mat` : a mat file with a dictionary of saved arrays. You can set how often this file is created during training 
    in your config file. A few important keys: \
-    'xs_train', 'xs_test': samples from inferred approximate posterior over latents xs \
-    #'zs_train', 'zs_test': samples from inferred approximate posterior over latents xs \
+    `xs_train`, `xs_test`: samples from inferred approximate posterior over latents xs \
+    `zs_logprob`, `zs_logprob_test`: log posterior over discrete states z, when k > 1 \
+    `ys_recon_train`, `ys_recon_test`: reconstructions under the model.
     saved r2, mse, cosmooth etc.
 
 5 - use a notebook to load and visualize the results.
