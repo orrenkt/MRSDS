@@ -68,7 +68,6 @@ class MRSDS(tf.keras.Model):
 
     self.psi_add = psi_add
 
-
   def call(self, ys, us=None, masks=None, drop_idxs=None, num_samples=1,
            dtype=tf.float32, do_batch=False, random_seed=0, xmean=False,
            temperature=1.0, beta=1):
