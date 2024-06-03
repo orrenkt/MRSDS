@@ -29,181 +29,6 @@ def get_communication_models(x_transition_networks, num_regions, num_states, inp
   return communication_models
 
 
-def get_msgs_and_norms_svae(communication_models, result_dict, num_states, num_regions, latent_dim,
-                            latent_region_sizes, trial_lengths, input_len, input_regions='all',
-                            conditional_msgs=False, conditional_inputs=False):
-  """
-  Note locally conditioned model requires concatenating local and second region xs.
-  Also note input models takes in entire x vector across regions and split region internally.
-  """
-  xs_input = result_dict['x_sampled'].numpy()[:,:-1,:]
-  if len(xs_input.shape) == 4 and xs_input.shape[-2] == 1: # otherwise breaks for d=1 case.
-    xs_input = np.squeeze(xs_input,axis=-2)
-  us_input = result_dict['us'].numpy()[:,1:,:]
-  num_trials, num_timepoints = xs_input.shape[0:2]
-
-  latent_region_sizes_cs = np.cumsum([0] + latent_region_sizes)
-  starts_ends = list(zip(latent_region_sizes_cs[:-1], latent_region_sizes_cs[1:]))
-
-  # Create copies of xs input with each region zeroed out
-  if conditional_msgs:
-    xs_input0s = []
-    for i in range(num_regions):
-      start, end = starts_ends[i]
-      xs_input0 = np.copy(xs_input)
-      xs_input0[:,:,start:end] = 0
-      xs_input0s.append(xs_input0)
-
-  if conditional_inputs:
-    us_input0s = []
-    for l in range(input_len):
-      us_input0 = np.copy(us_input)
-      us_input0[:,:,l] = 0
-      us_input0s.append(us_input0)
-
-  #if zcond:
-  #  zs = []
-  #  for i in range(num_states):
-  #    zs1 = np.zeros([num_trials, num_timepoints, num_states])
-  #    zs1[:,:,i] = 1
-  #  zs.append(zs1)
-
-  # Get messages
-  messages = np.zeros((num_states, num_trials, num_timepoints+1,
-                       num_regions, num_regions+input_len, latent_dim))
-  messages_diff = np.zeros_like(messages)
-  for k in range(num_states):
-    for i in range(num_regions):
-      start, end = starts_ends[i]
-      xs_i = xs_input[:,:,start:end]
-      for j in range(num_regions):
-          #if zcond:
-          if i == j:
-            messages[k,:,1:,i,j,:] = communication_models[k][i][j](xs_input).numpy() - xs_i
-          else:
-            msg = communication_models[k][i][j](xs_input).numpy()
-            msg0 = 0
-            if conditional_msgs:
-              msg0 = communication_models[k][i][j](xs_input0s[j]).numpy()
-            messages[k,:,1:,i,j,:] = msg - msg0
-
-      if input_regions == 'all' or (isinstance(input_regions, list) and i in input_regions):
-        # External input (us) effects, one per dim
-        for l in range(num_regions, num_regions+input_len):
-          inputs = [xs_input, us_input]
-          msg = communication_models[k][i][l](inputs).numpy()
-          msg0 = 0
-          if conditional_inputs:
-            inputs0 = [xs_input, us_input0s[l-num_regions]]
-            msg0 = communication_models[k][i][l](inputs0).numpy()
-          messages[k, :, 1:, i, l, :] = msg - msg0
-
-  # Zero out padded sequences:
-  assert len(trial_lengths) == num_trials
-  for i, tl in enumerate(trial_lengths):
-    messages[:,i,tl:,:,:,:] = 0
-
-  # Marginalize over z
-  Ezs = np.exp(result_dict['z_posterior_ll'].numpy())[:,:,:]
-  Ezs = np.moveaxis(Ezs, -1, 0)
-  Ems = np.sum(Ezs[:,:,:,None,None,None] * messages, axis=0)
-
-  # Norm
-  msg_input_norms = np.linalg.norm(Ems, axis=-1)
-
-  return Ems, msg_input_norms
-
-
-def get_msgs_and_norms(communication_models, result_dict, num_states, num_regions, latent_dim,
-                       latent_region_sizes, trial_lengths, input_len, input_regions='all',
-                       conditional_msgs=False, conditional_inputs=False, x0_model=False):
-  """
-  Note locally conditioned model requires concatenating local and second region xs.
-  Also note input models takes in entire x vector across regions and split region internally.
-  """
-  if x0_model:
-    import copy
-    communication_models = copy.deepcopy(communication_models)
-    tfmap_move = lambda f, x: tf.map_fn(f, np.moveaxis(x, 1, 0))
-    for i in range(num_states):
-      for j in range(num_regions):
-        for k in range(num_regions+input_len):
-          communication_models[i,k,j] = tfmap_move(communication_models[i,k,j])
-     #tf.map_fn(communication_models[k][i][j], np.moveaxis(xs_input, 1, 0)).numpy()
-
-  xs_input = result_dict['x_sampled'].numpy()[:,:-1,:]
-  if len(xs_input.shape) == 4 and xs_input.shape[-2] == 1: # otherwise breaks for d=1 case.
-    xs_input = np.squeeze(xs_input,axis=-2)
-  us_input = result_dict['us'].numpy()[:,:-1,:]
-  num_trials, num_timepoints = xs_input.shape[0:2]
-
-  latent_region_sizes_cs = np.cumsum([0] + latent_region_sizes)
-  starts_ends = list(zip(latent_region_sizes_cs[:-1], latent_region_sizes_cs[1:]))
-
-  # Create copies of xs input with each region zeroed out
-  if conditional_msgs:
-    xs_input0s = []
-    for i in range(num_regions):
-      start, end = starts_ends[i]
-      xs_input0 = np.copy(xs_input)
-      xs_input0[:,:,start:end] = 0
-      xs_input0s.append(xs_input0)
-
-  if conditional_inputs:
-    us_input0s = []
-    for l in range(input_len):
-      us_input0 = np.copy(us_input)
-      us_input0[:,:,l] = 0
-      us_input0s.append(us_input0)
-
-  # Get messages
-  messages = np.zeros((num_states, num_trials, num_timepoints+1,
-                       num_regions, num_regions+input_len, latent_dim))
-  messages_diff = np.zeros_like(messages)
-  for k in range(num_states):
-    for i in range(num_regions):
-      start, end = starts_ends[i]
-      xs_i = xs_input[:,:,start:end]
-      for j in range(num_regions):
-          if i == j:
-            #if x0_model:
-            #  messages[k,:,1:,i,j,:] = tf.map_fn(communication_models[k][i][j], np.moveaxis(xs_input, 1, 0)).numpy() - xs_i
-            #else:
-            messages[k,:,1:,i,j,:] = communication_models[k][i][j](xs_input).numpy() - xs_i
-          else:
-            msg = communication_models[k][i][j](xs_input).numpy()
-            msg0 = 0
-            if conditional_msgs:
-              msg0 = communication_models[k][i][j](xs_input0s[j]).numpy()
-            messages[k,:,1:,i,j,:] = msg - msg0
-
-      if input_regions == 'all' or (isinstance(input_regions, list) and i in input_regions):
-        # External input (us) effects, one per dim
-        for l in range(num_regions, num_regions+input_len):
-          inputs = [xs_input, us_input]
-          msg = communication_models[k][i][l](inputs).numpy()
-          msg0 = 0
-          if conditional_inputs:
-            inputs0 = [xs_input, us_input0s[l-num_regions]]
-            msg0 = communication_models[k][i][l](inputs0).numpy()
-          messages[k, :, 1:, i, l, :] = msg - msg0
-
-  # Zero out padded sequences:
-  assert len(trial_lengths) == num_trials
-  for i, tl in enumerate(trial_lengths):
-    messages[:,i,tl:,:,:,:] = 0
-
-  # Marginalize over z
-  Ezs = np.exp(result_dict['z_posterior_ll'].numpy())[:,:,:]
-  Ezs = np.moveaxis(Ezs, -1, 0)
-  Ems = np.sum(Ezs[:,:,:,None,None,None] * messages, axis=0)
-
-  # Norm
-  msg_input_norms = np.linalg.norm(Ems, axis=-1)
-
-  return Ems, msg_input_norms
-
-
 def get_grad_field_svae(dynamics_models, x1_range=None, x2_range=None, lr=None,
                         norm=True, eps=1e-4, latent_dims=2, mlen=1):
   # NOTE: should also be able to compute for any dims
@@ -268,21 +93,20 @@ def get_grad_field_svae(dynamics_models, x1_range=None, x2_range=None, lr=None,
 
   return x1_, x2_, all_dvdxs, all_grads
 
-# NOTE WE HAVE TWO OF THESE FUNCTIONS
-# NOTE: need to implement
-def get_msgs_and_norms_svae(communication_models, result_dict, num_states, num_regions, latent_dim,
-                       latent_region_sizes, trial_lengths, input_len, input_regions='all',
-                       conditional_msgs=False, conditional_inputs=False, x0_model=False):
+
+def get_msgs_and_norms(communication_models, xs, us, zs_logprob,
+                       num_states, num_regions, latent_dim,
+                       latent_region_sizes, trial_lengths, input_len,
+                       input_regions='all', conditional_msgs=False,
+                       conditional_inputs=False, svae=True):
   """
   Note locally conditioned model requires concatenating local and second region xs.
   Also note input models takes in entire x vector across regions and split region internally.
   """
-  xs_input = result_dict['x_sampled'].numpy()[:,:-1,:]
-  print('xshape', xs_input.shape)
+  xs_input = xs[:,:-1,:]
   if len(xs_input.shape) == 4 and xs_input.shape[-2] == 1: # otherwise breaks for d=1 case.
     xs_input = np.squeeze(xs_input,axis=-2)
-  print('xshape', xs_input.shape)
-  us_input = result_dict['us'].numpy()[:,:-1,:]
+  us_input = us[:,1:,:]
   num_trials, num_timepoints = xs_input.shape[0:2]
 
   latent_region_sizes_cs = np.cumsum([0] + latent_region_sizes)
@@ -305,7 +129,10 @@ def get_msgs_and_norms_svae(communication_models, result_dict, num_states, num_r
       us_input0s.append(us_input0)
 
   # For svae need to input dummy psis
-  psis = np.zeros_like(xs_input)
+  inputs = [xs_input, us_input]
+  if svae:
+    psis = np.zeros_like(xs_input)
+    inputs.append(psis)
 
   # Get messages
   messages = np.zeros((num_states, num_trials, num_timepoints+1,
@@ -317,9 +144,9 @@ def get_msgs_and_norms_svae(communication_models, result_dict, num_states, num_r
       xs_i = xs_input[:,:,start:end]
       for j in range(num_regions):
           if i == j:
-            messages[k,:,1:,i,j,:] = communication_models[k][i][j](xs_input, psis).numpy() - xs_i
+            messages[k,:,1:,i,j,:] = communication_models[k][i][j](inputs).numpy() - xs_i
           else:
-            msg = communication_models[k][i][j](xs_input, psis).numpy()
+            msg = communication_models[k][i][j](inputs).numpy()
             msg0 = 0
             if conditional_msgs:
               msg0 = communication_models[k][i][j](xs_input0s[j]).numpy()
@@ -330,15 +157,10 @@ def get_msgs_and_norms_svae(communication_models, result_dict, num_states, num_r
         for l in range(num_regions, num_regions+input_len):
           inputs = [xs_input, us_input, psis]
           msg = communication_models[k][i][l](inputs).numpy()
-          if i < 2 and l == 5:
-            print(msg.shape)
-            print(k, 'sum msg', i, l, np.sum(msg))
           msg0 = 0
           if conditional_inputs:
             inputs0 = [xs_input, us_input0s[l-num_regions]]
             msg0 = communication_models[k][i][l](inputs0).numpy()
-            if i < 2 and l == 5:
-              print(k, 'sum msg0', i, l, np.sum(msg0))
           messages[k, :, 1:, i, l, :] = msg - msg0
 
   # Zero out padded sequences:
@@ -347,9 +169,9 @@ def get_msgs_and_norms_svae(communication_models, result_dict, num_states, num_r
     messages[:,i,tl:,:,:,:] = 0
 
   # Marginalize over z
-  Ezs = np.exp(result_dict['z_posterior_ll'].numpy()) #[:,:,:]
-  Ezs = np.moveaxis(Ezs, -1, 0)
   if num_states > 1:
+    Ezs = np.exp(zs_logprob) #[:,:,:]
+    Ezs = np.moveaxis(Ezs, -1, 0)
     Ems = np.sum(Ezs[:,:,:,None,None,None] * messages, axis=0)
   else:
     Ems = np.squeeze(messages, axis=0)
