@@ -15,6 +15,8 @@ tf.autograph.set_verbosity(0)
 import numpy as np
 import tensorflow as tf
 
+from tensorflow.python.profiler import trace
+
 # NOTE should set this up properally
 mrsds = imp.load_source('mrsds', './__init__.py')
 from mrsds.utils_config import load_yaml_config, get_configs, get_learning_rate_config
@@ -217,34 +219,50 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
 
   # ---- Main training loop ----
 
+  from contextlib import nullcontext
+
+  tf.profiler.experimental.start('/scratch/orrenk/profiling/')
+  print('started profiler')
+
   num_steps = cft.num_steps
-  while optimizer.iterations < num_steps:
+  while optimizer.iterations < 11: #num_steps:
 
-    # --- Batch setup ---
-    batch = train_iter.next()
-    if 'double-well' in cfd.data_source or 'lv' in cfd.data_source:
-      batch = batch[2:] # Skip true xs and zs
-    batch_dict = {'ys': batch[0], 'us': batch[1], 'masks': batch[2]}
+    ss = True if optimizer.iterations > 5 else False
+    with trace.Trace("TrainStep", step_num=optimizer.iterations, _r=1) if ss else nullcontext() as gs:
 
-    # ---- Train step ----
+        # --- Batch setup ---
+        batch = train_iter.next()
+        if 'double-well' in cfd.data_source or 'lv' in cfd.data_source:
+          batch = batch[2:] # Skip true xs and zs
+        batch_dict = {'ys': batch[0], 'us': batch[1], 'masks': batch[2]}
 
-    current_iter = optimizer.iterations.numpy()
-    learning_rate = get_learning_rate(learning_rate_config, current_iter)
-    temperature = get_temperature(temperature_config, current_iter)
-    if betas_anneal:
-      beta = betas[current_iter]
-      beta = max(beta,1)
-    train_result = []  # Clear prev batch from memory
+        # ---- Train step ----
 
-    iter_seed = training_seed + int(optimizer.iterations)
+        current_iter = optimizer.iterations.numpy()
+        learning_rate = get_learning_rate(learning_rate_config, current_iter)
+        temperature = get_temperature(temperature_config, current_iter)
+        if betas_anneal:
+          beta = betas[current_iter]
+          beta = max(beta,1)
+        train_result = []  # Clear prev batch from memory
 
-    train_result = train_step(batch_dict, mrsds_model, optimizer,
-                              cft.num_samples, 0, objective, learning_rate, temperature,
-                              dynamics_only=dynamics_only, smooth_penalty=smooth_penalty,
-                              smooth_coef=smooth_coef, random_seed=iter_seed, beta=beta)
-    # Clear from memory
-    batch = []
-    batch_dict = []
+        iter_seed = training_seed + int(optimizer.iterations)
+
+        train_result = train_step(batch_dict, mrsds_model, optimizer,
+                                  cft.num_samples, 0, objective, learning_rate, temperature,
+                                  dynamics_only=dynamics_only, smooth_penalty=smooth_penalty,
+                                  smooth_coef=smooth_coef, random_seed=iter_seed, beta=beta)
+        # Clear from memory
+        batch = []
+        batch_dict = []
+
+    if optimizer.iterations > 10:
+      print('done profiling')
+      import time
+      time.sleep(5)
+      tf.profiler.experimental.stop()
+      time.sleep(5)
+      raise ValueError("")
 
     # Reset iters and train dynamics only
     # For mean field case: after training,

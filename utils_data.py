@@ -707,6 +707,7 @@ def construct_tf_datasets(train_idxs, test_idxs, ys_train, us_train, ys_test,
   types = (*_[0], tf.float32, tf.float32, tf.float32)
   dataset = (tf.data.Dataset.from_generator(generator, output_types=types)
              .batch(batch_size=batch_size)
+             .cache()
              .prefetch(tf.data.experimental.AUTOTUNE)
              .repeat(count=-1)) # repeat infinitely
 
