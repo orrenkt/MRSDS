@@ -100,9 +100,10 @@ class ContinuousStateTransition(tf.keras.Model):
 
     # TODO: want different cov mats per dynamics model??
 
+  @tf.function
   def call(self, input_tensor, us_tensor, dtype=tf.float32):
 
-    input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
+    #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
     if len(input_tensor.shape) == 2:
       batch_size, dist_dim = tf.unstack(tf.shape(input_tensor))
     else:
@@ -111,7 +112,7 @@ class ContinuousStateTransition(tf.keras.Model):
     # NOTE could also just zero out us instead.
     inputs = [input_tensor]
     if us_tensor is not None and self.ux:
-      us_tensor = tf.convert_to_tensor(us_tensor, dtype_hint=dtype)
+      #us_tensor = tf.convert_to_tensor(us_tensor, dtype_hint=dtype)
       if len(input_tensor) > len(us_tensor.shape):  # NOTE catch for x0 model
         us_tensor = tf.squeeze(us_tensor)
       inputs.append(us_tensor)
@@ -194,9 +195,10 @@ class ContinuousStateTransitionZCond(tf.keras.Model):
 
     # TODO: want different cov mats per dynamics model??
 
+  @tf.function
   def call(self, input_tensor, us_tensor, dtype=tf.float32):
 
-    input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
+    #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
     if len(input_tensor.shape) == 2:
       batch_size, dist_dim = tf.unstack(tf.shape(input_tensor))
     else:
@@ -206,7 +208,7 @@ class ContinuousStateTransitionZCond(tf.keras.Model):
     # [num_states, batch_size, num_steps, distribution_dim]
     inputs = [input_tensor]
     if us_tensor is not None and self.ux:
-      us_tensor = tf.convert_to_tensor(us_tensor, dtype_hint=dtype)
+      #us_tensor = tf.convert_to_tensor(us_tensor, dtype_hint=dtype)
       if len(input_tensor) > len(us_tensor.shape):  # NOTE catch for x0 model
         us_tensor = tf.squeeze(us_tensor)
       inputs.append(us_tensor)
@@ -232,6 +234,104 @@ class ContinuousStateTransitionZCond(tf.keras.Model):
   @property
   def output_event_dims(self):
     return self.distribution_dim
+
+
+
+class ContinuousStateTransitionPsis2(tf.keras.Model):
+  """
+  Dynamics transition for svae p(x[t] | x[t-1], z[t], psi[t]).
+  By default (when not running inference), psi = 0
+  """
+
+  def __init__(self, transition_mean_nets, distribution_dim,
+               num_states=1, use_triangular_cov=True,
+               use_trainable_cov=True, ux=True,
+               raw_sigma_bias=0.0, sigma_min=1e-5, sigma_scale=0.05,
+               dtype=tf.float32, name="ContinuousStateTransition"):
+    """
+    Args:
+      transition_mean_nets: list of dynamics networks
+      distribution_dim: int scalar, dimension of latent x
+      num_states: int scalar, number of discrete states z
+      use_trainable_cov: flag for traininable cov, default True.
+      use_triangular_cov: flag for using tfp.distributions.MultivariateNormalTriL
+        instead of default tfp.distributions.MultivariateNormalDiag
+      raw_sigma_bias: float scalar added to raw sigma
+      sigma_min: float scalar to precent underflow
+      sigma_scale: float scalar for scaling sigma
+    """
+    super(ContinuousStateTransitionPsis2, self).__init__()
+
+    assertion_str = "Wrong number of networks"
+    assert len(transition_mean_nets) == num_states, assertion_str
+    self.x_trans_nets = transition_mean_nets
+    self.num_states = num_states
+    self.use_triangular_cov = use_triangular_cov
+    self.distribution_dim = distribution_dim
+
+    if self.use_triangular_cov:
+      shape = int(self.distribution_dim * (self.distribution_dim + 1) / 2)
+    else:
+      shape = self.distribution_dim
+
+    _ = tf.random.uniform(shape=[shape], minval=0., maxval=1., dtype=dtype)
+    _ = tf.Variable(_, name="{}_cov".format(name), dtype=dtype, trainable=use_trainable_cov)
+    if self.use_triangular_cov:
+      _ = tfp.math.fill_triangular(_)
+    self.cov_mat = tf.maximum(tf.nn.softmax(_ + raw_sigma_bias), sigma_min) * sigma_scale
+
+    self.ux = ux
+
+    # TODO: want different cov mats per dynamics model??
+
+    #if self.use_triangular_cov:
+    #  self.output_dist = tfp.layers.MultivariateNormalTriL(6 + 6) #, self.cov_mat.shape) #(6)
+    #  #self.output_dist = tfd.MultivariateNormalTriL(6, 12) #(6)
+    #  #(loc=mean_tensor, scale_tril=self.cov_mat)
+    #else:
+    #  self.output_dist = tfp.layers.MultivariateNormalTriL(6 + 6) #, self.cov_mat.shape) #(6)
+    #  #self.output_dist = tfp.layers.MultivariateNormalDiag(6) #(6)
+    #  #self.output_dist = tfd.MultivariateNormalDiag(6) #(6)
+    #  #(loc=mean_tensor, scale_diag=self.cov_mat)
+    #return tfp.experimental.as_composite(output_dist)
+
+  @tf.function
+  def call(self, input_tensor, us_tensor, psis_tensor, dtype=tf.float32):
+
+    #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
+    num_steps = 1
+    if len(input_tensor.shape) == 2:
+      batch_size, dist_dim = tf.unstack(tf.shape(input_tensor))
+    else:
+      batch_size, num_steps, dist_dim = tf.unstack(tf.shape(input_tensor))
+
+    # The shape of the mean_tensor after tf.stack is
+    # [num_states, batch_size, num_steps, distribution_dim]
+    _ = tf.stack([x_net([input_tensor, us_tensor, psis_tensor]) for x_net in self.x_trans_nets])
+    if len(input_tensor.shape) == 2:
+      _ = tf.squeeze(_)
+      mean_tensor = tf.reshape(_, [batch_size, self.num_states, dist_dim])
+      if self.num_states == 1:
+        mean_tensor = tf.squeeze(mean_tensor, axis=1)
+    else:
+      _ = tf.transpose(_, [1,2,0,3])
+      mean_tensor = tf.reshape(_, [batch_size, num_steps, self.num_states, dist_dim])
+      if self.num_states == 1:
+        mean_tensor = tf.squeeze(mean_tensor, axis=[2])
+
+    if self.use_triangular_cov:
+      output_dist = tfd.MultivariateNormalTriL(loc=mean_tensor, scale_tril=self.cov_mat)
+    else:
+      output_dist = tfd.MultivariateNormalDiag(loc=mean_tensor, scale_diag=self.cov_mat)
+    return tfp.experimental.as_composite(output_dist)
+
+    #return self.output_dist(mean_tensor, self.cov_mat)
+    #return tfp.experimental.as_composite(output_dist)
+
+  @property
+  def output_event_dims(self):
+    return self.distribution_dim
+
 
 
 class ContinuousStateTransitionPsis(tf.keras.Model):
@@ -281,36 +381,19 @@ class ContinuousStateTransitionPsis(tf.keras.Model):
 
     # TODO: want different cov mats per dynamics model??
 
+  @tf.function
   def call(self, input_tensor, us_tensor, psis_tensor, dtype=tf.float32):
 
-    input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
+    #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
     num_steps = 1
     if len(input_tensor.shape) == 2:
       batch_size, dist_dim = tf.unstack(tf.shape(input_tensor))
     else:
       batch_size, num_steps, dist_dim = tf.unstack(tf.shape(input_tensor))
 
-    # NOTE could also just zero out us instead.
-    inputs = [input_tensor]
-    if us_tensor is not None and self.ux:
-      us_tensor = tf.convert_to_tensor(us_tensor, dtype_hint=dtype)
-      if len(input_tensor.shape) > len(us_tensor.shape):  # NOTE catch for x0 model
-        us_tensor = tf.squeeze(us_tensor)
-      inputs.append(us_tensor)
-    # NOTE DEBUGGING recent addition of this
-    else:
-      #print('Using zeros for us')
-      if num_steps == 1:
-        inputs.append(tf.zeros((batch_size, 2)))
-      else:
-        inputs.append(tf.zeros((batch_size, num_steps, 2)))
-      #print('no us input to xtransition.')
-
-    inputs.append(psis_tensor)
-
     # The shape of the mean_tensor after tf.stack is
     # [num_states, batch_size, num_steps, distribution_dim]
-    _ = tf.stack([x_net(inputs) for x_net in self.x_trans_nets])
+    _ = tf.stack([x_net([input_tensor, us_tensor, psis_tensor]) for x_net in self.x_trans_nets])
     if len(input_tensor.shape) == 2:
       _ = tf.squeeze(_)
       mean_tensor = tf.reshape(_, [batch_size, self.num_states, dist_dim])
@@ -391,9 +474,10 @@ class ContinuousStateTransitionPsisZCond(tf.keras.Model):
 
     # TODO: want different cov mats per dynamics model??
 
+  @tf.function
   def call(self, input_tensor, us_tensor, psis_tensor, dtype=tf.float32):
 
-    input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
+    #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
     if len(input_tensor.shape) == 2:
       batch_size, dist_dim = tf.unstack(tf.shape(input_tensor))
       num_steps = 1
@@ -403,7 +487,7 @@ class ContinuousStateTransitionPsisZCond(tf.keras.Model):
     # NOTE could also just zero out us instead.
     inputs = [input_tensor]
     if us_tensor is not None and self.ux:
-      us_tensor = tf.convert_to_tensor(us_tensor, dtype_hint=dtype)
+      #us_tensor = tf.convert_to_tensor(us_tensor, dtype_hint=dtype)
       if len(input_tensor.shape) > len(us_tensor.shape):  # NOTE catch for x0 model
         us_tensor = tf.squeeze(us_tensor)
       inputs.append(us_tensor)

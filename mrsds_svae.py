@@ -16,7 +16,8 @@ tfd = tfp.distributions
 import time
 from collections import namedtuple
 
-from mrsds.generative_models import (ContinuousStateTransitionPsis, DiscreteStateTransition,
+from mrsds.generative_models import (ContinuousStateTransitionPsis2, ContinuousStateTransitionPsis,
+                                     DiscreteStateTransition,
                                      GaussianEmissions, PoissonEmissions,
                                      build_mr_dynamics_net2, build_mr_emission_net,
                                      construct_x0_dist)
@@ -96,6 +97,8 @@ class MRSDS(tf.keras.Model):
     inputs, masks, time_masks = self._prep_inputs(ys, us, masks, dtype)
     num_samples = tf.convert_to_tensor(num_samples, dtype_hint=tf.int32)
     batch_size, num_steps = tf.unstack(tf.shape(inputs[0])[:2])
+
+    print(inputs[0].shape, masks.shape)
 
     # Mask inputs for inference net.
     inputs_masked = [inputs[0] * masks, inputs[1]]
@@ -316,10 +319,10 @@ class MRSDS(tf.keras.Model):
     Mask is for specifying any padded / dropped neurons.
     Time mask is for masking timepoints only.
     """
-    inputs = tf.convert_to_tensor(inputs, dtype_hint=dtype, name="MRSDS_Input_Tensor")
+    #inputs = tf.convert_to_tensor(inputs, dtype_hint=dtype, name="MRSDS_Input_Tensor")
     batch_size, num_steps = tf.unstack(tf.shape(inputs)[:2])
     if masks is not None:
-      masks = tf.convert_to_tensor(masks, dtype_hint=dtype, name="MRSDS_Mask_Tensor")
+      #masks = tf.convert_to_tensor(masks, dtype_hint=dtype, name="MRSDS_Mask_Tensor")
       # Add a time dim if not given
       if len(tf.unstack(tf.shape(masks))) == 2:
         masks = tf.expand_dims(masks, axis=1)
@@ -330,7 +333,8 @@ class MRSDS(tf.keras.Model):
     time_masks = tf.squeeze(masks[:,:,0])
 
     if us is not None:
-      us = tf.convert_to_tensor(us, dtype_hint=dtype, name="MRSDS_US_Tensor")
+      pass
+      #us = tf.convert_to_tensor(us, dtype_hint=dtype, name="MRSDS_US_Tensor")
     else:
       us = tf.zeros([batch_size, num_steps, self.num_inputs], dtype=dtype)
 
@@ -549,11 +553,11 @@ def build_model(model_dir, config_path, num_regions, num_dims,
                                               seed=random_seed+i)
                        for i in range(num_states)]
   x_transition_nets, x_transition_nets_time = [[_] for _ in x_transition_nets[0]]
-  x_transition = ContinuousStateTransitionPsis(
+  x_transition = ContinuousStateTransitionPsis2(
     transition_mean_nets=x_transition_nets,
     distribution_dim=hidden_dim,
     num_states=num_states,
-    use_triangular_cov=cfg_xtr.use_triangular_cov,
+    use_triangular_cov=True, #cfg_xtr.use_triangular_cov,
     use_trainable_cov=cfg_xtr.use_trainable_cov,
     raw_sigma_bias=cfg_xtr.raw_sigma_bias,
     sigma_min=cfg_xtr.sigma_min,
@@ -563,7 +567,7 @@ def build_model(model_dir, config_path, num_regions, num_dims,
     transition_mean_nets=x_transition_nets_time,
     distribution_dim=hidden_dim,
     num_states=num_states,
-    use_triangular_cov=cfg_xtr.use_triangular_cov,
+    use_triangular_cov=True, #cfg_xtr.use_triangular_cov,
     use_trainable_cov=cfg_xtr.use_trainable_cov,
     raw_sigma_bias=cfg_xtr.raw_sigma_bias,
     sigma_min=cfg_xtr.sigma_min,

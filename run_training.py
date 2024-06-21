@@ -20,7 +20,7 @@ from tensorflow.python.profiler import trace
 # NOTE should set this up properally
 mrsds = imp.load_source('mrsds', './__init__.py')
 from mrsds.utils_config import load_yaml_config, get_configs, get_learning_rate_config
-from mrsds.utils_data import load_prep_data, construct_tf_datasets
+from mrsds.utils_data import load_prep_data, construct_tf_datasets, construct_tf_datasets2
 from mrsds.utils_training import get_learning_rate, get_temperature, eval_perf, save_results2
 from mrsds.utils_training import train_step_modular_svae as train_step
 
@@ -45,12 +45,18 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
   if 'svae' in name:
     svae = True
 
+  #tf.get_logger().setLevel('INFO')
+  #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'  # Set log level to DEBUG
+  #tf.debugging.set_log_device_placement(True)
+
   # Set GPU
   os.environ['tf_data_private_threadpool.thread_limit'] = '100'
   tf.config.run_functions_eagerly(True)
   gpus = tf.config.list_physical_devices('GPU')
   tf.config.experimental.set_visible_devices(gpus[gpu_id], 'GPU')
   tf.config.experimental.set_memory_growth(gpus[gpu_id], True)
+  tf.config.optimizer.set_jit(True)
+  #tf.config.run_functions_eagerly(False)
 
   # NOTE single GPU by default. If model needs extra GPUs can manually set here
   # Should change command line arg parsing to support multiple gpu ids.
@@ -84,8 +90,12 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
   num_inputs = us_train[0].shape[1]
 
   # Number of batches per epoch
+  ds_repeats = 10
+  mask_multiple = 10
   num_train_trials = len(trial_lengths_train)
-  epoch_size = int(np.floor(num_train_trials / cft.batch_size))
+  num_train_masks = num_train_trials*mask_multiple
+  epoch_size = int(np.floor(num_train_trials*ds_repeats / cft.batch_size))
+  #epoch_size = int(np.floor(num_train_trials / cft.batch_size))
   print('Epoch size {}'.format(epoch_size))
   inputs = [train_idxs, test_idxs, ys_train, us_train, ys_test,
             ys_test_cosmooth, us_test, masks_train, masks_test,
@@ -107,13 +117,26 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
   np.random.seed(0)
 
   # Build TF dataset loaders
-  (train_dataset, test_dataset, test_dataset_cosmooth,
-   train_dataset_final) = construct_tf_datasets(*inputs, dropout_trial_perc=dtp,
+
+  (train_dataset, train_masks, test_dataset, test_dataset_cosmooth,
+   train_dataset_final) = construct_tf_datasets2(*inputs, dropout_trial_perc=dtp,
                                                 dropout_training=cft.dropout,
                                                 batch_size=cft.batch_size,
                                                 random_seed=data_seed,
                                                 **true_latents, **extra_args)
-  train_iter = train_dataset.as_numpy_iterator()
+
+  train_dataset = train_dataset.shuffle(num_train_trials, reshuffle_each_iteration=True).repeat(ds_repeats)
+  train_masks = train_masks.shuffle(num_train_masks, reshuffle_each_iteration=True)
+  train_iter = train_dataset.batch(cft.batch_size, drop_remainder=True).as_numpy_iterator()
+  masks_iter = train_masks.batch(cft.batch_size, drop_remainder=True).as_numpy_iterator()
+
+  #(train_dataset, test_dataset, test_dataset_cosmooth,
+  # train_dataset_final) = construct_tf_datasets(*inputs, dropout_trial_perc=dtp,
+  #                                              dropout_training=cft.dropout,
+  #                                              batch_size=cft.batch_size,
+  #                                              random_seed=data_seed,
+  #                                              **true_latents, **extra_args)
+  #train_iter = train_dataset.as_numpy_iterator()
   test_iter = test_dataset.as_numpy_iterator()
   test_batch = test_iter.next()
   test_cosmooth_iter = test_dataset_cosmooth.as_numpy_iterator()
@@ -128,6 +151,8 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
     eval_batches = (train_final_batch[2:], test_batch[2:], test_cosmooth_batch[2:])
 
   ## ----- Build model -----
+
+  tf.config.run_functions_eagerly(False)
 
   args = [num_regions, num_dims, region_sizes, trial_length]
   mrsds_model, x_transition_networks, _ = mrsds.build_model(model_dir, config_path, *args,
@@ -224,17 +249,25 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
   tf.profiler.experimental.start('/scratch/orrenk/profiling/')
   print('started profiler')
 
+  import time
+
   num_steps = cft.num_steps
   while optimizer.iterations < 11: #num_steps:
+
+    start = time.time()
 
     ss = True if optimizer.iterations > 5 else False
     with trace.Trace("TrainStep", step_num=optimizer.iterations, _r=1) if ss else nullcontext() as gs:
 
         # --- Batch setup ---
         batch = train_iter.next()
+        batch_masks = masks_iter.next() # tuple of masks, drop_idxs
         if 'double-well' in cfd.data_source or 'lv' in cfd.data_source:
           batch = batch[2:] # Skip true xs and zs
-        batch_dict = {'ys': batch[0], 'us': batch[1], 'masks': batch[2]}
+        batch_dict = {'ys': batch[0], 'us': batch[1], 'masks': batch_masks[0]} #batch[2]}
+
+        print(len(batch_masks))
+        print('ss', batch[0].shape, batch_masks[0].shape, batch_masks[1].shape)
 
         # ---- Train step ----
 
@@ -258,7 +291,7 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
 
     if optimizer.iterations > 10:
       print('done profiling')
-      import time
+      #import time
       time.sleep(5)
       tf.profiler.experimental.stop()
       time.sleep(5)
@@ -285,8 +318,8 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
     tracking['log_pys'].append(np.sum(train_result['logpy_sum'].numpy()))
     tracking['log_qxs'].append(np.sum(train_result['xt_entropy'].numpy()))
 
-    print('iter:', current_iter, 'elbo: ', train_result[objective].numpy(),
-          'logpxsum: ', train_result['logpx_sum'].numpy(),
+    print('iter:', current_iter, 'time:', time.time()-start, 'elbo:', train_result[objective].numpy(),
+          'logpxsum:', train_result['logpx_sum'].numpy(),
           'lr:',learning_rate, 'beta:', beta)
 
     # ---- Logging ----

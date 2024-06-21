@@ -636,6 +636,112 @@ def prep_pad_train_test_cosmooth(ys, us, region_sizes, test_perc=0.1, drop_perc=
           train_idxs, test_idxs, masks_train, masks_test, *_)
 
 
+def generate_dropout_masks2(region_sizes, num_neurons, num_trials,
+                            dropout_perc=0.25, multiple=10):
+  """
+  Generate random dropout masks, to be shuffled seperately from data on each epoch.
+  All the masks include dropout, we sample from trial_perc in the train loop and include if true
+  Otherwise add generic null mask.
+  Multiday ys can be padded ie num_neurons>sum(region_sizes).
+  Only dropout neurons based on region_sizes
+  """
+  print(region_sizes)
+  # TODO: handle multiday neuron padding
+  region_sizes_cumsum = np.cumsum([0] + list(region_sizes))
+  nt = multiple*num_trials  # Generate x50 to get diversity
+  masks = np.ones([nt, num_neurons]).astype(bool)
+  all_drop_idxs = []
+  for idx in range(nt):
+    drop_idxs = []
+    # Per region dropout
+    for i, region_size in enumerate(region_sizes):
+      drop_ = int(region_size*dropout_perc)
+      nidxs = np.random.choice(np.arange(*region_sizes_cumsum[i:i+2]),
+                               drop_, replace=False)
+      masks[idx, nidxs] = False
+      drop_idxs.extend(nidxs)
+    all_drop_idxs.append(drop_idxs)
+  return masks.astype(np.float32), all_drop_idxs
+
+
+def construct_tf_datasets2(train_idxs, test_idxs, ys_train, us_train, ys_test,
+                           ys_test_cosmooth, us_test, masks_train, masks_test,
+                           #task_ids_train, task_ids_test,
+                           region_sizes, day_id=0, animal_id=0, ys_history_train=None,
+                           ys_history_test=None, dropout_training=False, dropout_perc=0.25,
+                           dropout_vary=False, vary_perc=0.5, dropout_trial_perc=1,
+                           xs_train=None, xs_test=None, zs_train=None, zs_test=None,
+                           include_latents=False, include_history=False, mask_multiple=10,
+                           random_seed=0, batch_size=64):
+
+  # TODO: handle multiday neuron padding
+
+  if ys_history_train is None:
+    print('No ys history provided, using dummy')
+    ys_history_train = np.zeros((len(ys_train),1))
+    ys_history_test = np.zeros((len(ys_test),1))
+
+  tf.random.set_seed(random_seed)
+  np.random.seed(random_seed)
+
+  # When using a simulator we optionally add true latent to each batch
+  train_latents = []
+  test_latents = [[],[]]
+  if include_latents:
+    train_latents.extend([tf.data.Dataset.from_tensor_slices(_)
+                          for _ in (xs_train, zs_train)])
+    test_latents[0].extend([np.as_array(xs_test), np.asarray(zs_test)])
+    test_latents[1].extend([np.asarray(xs_train[:batch_size]),
+                            np.asarray(zs_train[:batch_size])])
+
+  # Create zipped tf train dataset with all tensors. Batch later to combine with masks.
+  datasets = [*train_latents]
+  day_ids = np.zeros([len(ys_train),1]).astype(int) + day_id
+  animal_ids = np.zeros([len(ys_train),1]).astype(int) + animal_id
+  for array in (ys_train, us_train, day_ids, animal_ids, ys_history_train):
+    datasets.append(np.asarray(array))
+  train_dataset = tf.data.Dataset.from_tensor_slices(tuple(datasets))
+
+  # Add mask dataset, to be shuffled seperately. Not batched.
+  if dropout_training:
+    masks, drop_idxs = generate_dropout_masks2(region_sizes, ys_train[0].shape[-1],
+                                               len(ys_train), dropout_perc, mask_multiple)
+    train_masks = tf.data.Dataset.from_tensor_slices(masks)
+    train_dropids = tf.data.Dataset.from_tensor_slices(drop_idxs)
+    train_masks = tf.data.Dataset.zip((train_masks, train_dropids))
+  else:
+    masks = masks_train
+    train_masks = tf.data.Dataset.from_tensor_slices(masks)
+
+  ntest = len(ys_test)
+  td = (*test_latents[0], np.asarray(ys_test), np.asarray(us_test),
+        np.asarray(masks_test).astype(np.float32), np.repeat(day_id, ntest),
+        np.repeat(animal_id, ntest), np.asarray(ys_history_test))
+  test_dataset = (tf.data.Dataset.from_tensor_slices(td)
+                  .repeat(2).batch(batch_size,drop_remainder=False))
+
+  # For cosmoothing
+  td_ = (*test_latents[0], np.asarray(ys_test_cosmooth), np.asarray(us_test),
+         np.asarray(masks_test).astype(np.float32), np.repeat(day_id, ntest),
+         np.repeat(animal_id, ntest), np.asarray(ys_history_test))
+  test_dataset_cosmooth = (tf.data.Dataset.from_tensor_slices(td_)
+                           .repeat(2).batch(batch_size,drop_remainder=False))
+
+  # TODO: double check that the masks for final batch are fine
+
+  # We'll eventually evaluate on a single trained batch
+  td2 = (*test_latents[1], np.asarray(ys_train[:batch_size]),
+         np.asarray(us_train[:batch_size]), np.asarray(masks_train[:batch_size]).astype(np.float32),
+         np.repeat(day_id, batch_size), np.repeat(animal_id, batch_size),
+         np.asarray(ys_history_train[:batch_size]))
+  print(batch_size, td2[0].shape, td2[1].shape)
+  train_dataset_final = (tf.data.Dataset.from_tensor_slices(td2)
+                         .batch(batch_size=batch_size))
+
+  return (train_dataset, train_masks, test_dataset, test_dataset_cosmooth,
+          train_dataset_final)
+
+
 def construct_tf_datasets(train_idxs, test_idxs, ys_train, us_train, ys_test,
                           ys_test_cosmooth, us_test, masks_train, masks_test,
                           region_sizes, day_id=0, animal_id=0, ys_history_train=None,
