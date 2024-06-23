@@ -38,7 +38,7 @@ class TransformerInferenceNetwork(tf.keras.Model):
         embedding_nets = [embedding_nets]
       self.embedding_nets = embedding_nets
 
-  @tf.function
+  @tf.function #(experimental_relax_shapes=True)
   def call(self, inputs, num_samples=1, dtype=tf.float32, random_seed=131,
            xmean=False, masks=None, embed_id=0):
     """
@@ -112,7 +112,7 @@ class TransformerInferenceNetworkXZ(tf.keras.Model):
       self.embedding_nets = embedding_nets
     self.num_states = num_states
 
-  @tf.function
+  @tf.function #(experimental_relax_shapes=True)
   def call(self, inputs, num_samples=1, dtype=tf.float32, random_seed=131,
            xmean=False, masks=None, embed_id=0):
     """

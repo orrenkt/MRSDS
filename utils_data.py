@@ -714,18 +714,21 @@ def construct_tf_datasets2(train_idxs, test_idxs, ys_train, us_train, ys_test,
     train_masks = tf.data.Dataset.from_tensor_slices(masks)
 
   ntest = len(ys_test)
+  repeats = int(np.ceil(batch_size / ntest))
   td = (*test_latents[0], np.asarray(ys_test), np.asarray(us_test),
         np.asarray(masks_test).astype(np.float32), np.repeat(day_id, ntest),
         np.repeat(animal_id, ntest), np.asarray(ys_history_test))
   test_dataset = (tf.data.Dataset.from_tensor_slices(td)
-                  .repeat(2).batch(batch_size,drop_remainder=False))
+                  .repeat(repeats).batch(batch_size,drop_remainder=True))
+  print('test size', ntest, batch_size, td[0].shape, td[1].shape) #, tf.data.Dataset.from_tensor_slices(td).repeat(2))
 
   # For cosmoothing
   td_ = (*test_latents[0], np.asarray(ys_test_cosmooth), np.asarray(us_test),
          np.asarray(masks_test).astype(np.float32), np.repeat(day_id, ntest),
          np.repeat(animal_id, ntest), np.asarray(ys_history_test))
   test_dataset_cosmooth = (tf.data.Dataset.from_tensor_slices(td_)
-                           .repeat(2).batch(batch_size,drop_remainder=False))
+                           .repeat(repeats).batch(batch_size,drop_remainder=True))
+  print('test cosmooth size', batch_size, td_[0].shape, td_[1].shape) #, tf.data.Dataset.from_tensor_slices(td).repeat(2))
 
   # TODO: double check that the masks for final batch are fine
 
@@ -734,7 +737,7 @@ def construct_tf_datasets2(train_idxs, test_idxs, ys_train, us_train, ys_test,
          np.asarray(us_train[:batch_size]), np.asarray(masks_train[:batch_size]).astype(np.float32),
          np.repeat(day_id, batch_size), np.repeat(animal_id, batch_size),
          np.asarray(ys_history_train[:batch_size]))
-  print(batch_size, td2[0].shape, td2[1].shape)
+  print('train final size', batch_size, td2[0].shape, td2[1].shape)
   train_dataset_final = (tf.data.Dataset.from_tensor_slices(td2)
                          .batch(batch_size=batch_size))
 

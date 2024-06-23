@@ -540,12 +540,13 @@ def save_results(fpath, mrsds_model, x_transition_networks, ys_train,
   return
 
 
-@tf.function
+@tf.function #(experimental_relax_shapes=True)
 def train_step_modular_svae(batch_dict, mrsds_model, optimizer,
                             num_samples, num_days, objective, learning_rate,
-                            temperature=1.0, smooth_penalty=False, smooth_coef=1,
+                            temperature=tf.constant(1.0), smooth_penalty=False, smooth_coef=1,
                             dynamics_only=False, track_grads=False,
-                            modular_lrs=[4,1,1,2,1], random_seed=0, beta=1):
+                            modular_lrs=[4,1,1,2,1], random_seed=131, #tf.constant(0),
+                            beta=tf.constant(1)):
   """Runs one training step and returns metrics evaluated on the train set.
 
   Args:

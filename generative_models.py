@@ -100,7 +100,7 @@ class ContinuousStateTransition(tf.keras.Model):
 
     # TODO: want different cov mats per dynamics model??
 
-  @tf.function
+  @tf.function #(experimental_relax_shapes=True)
   def call(self, input_tensor, us_tensor, dtype=tf.float32):
 
     #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
@@ -195,7 +195,7 @@ class ContinuousStateTransitionZCond(tf.keras.Model):
 
     # TODO: want different cov mats per dynamics model??
 
-  @tf.function
+  @tf.function #(experimental_relax_shapes=True)
   def call(self, input_tensor, us_tensor, dtype=tf.float32):
 
     #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
@@ -295,7 +295,7 @@ class ContinuousStateTransitionPsis2(tf.keras.Model):
     #  #(loc=mean_tensor, scale_diag=self.cov_mat)
     #return tfp.experimental.as_composite(output_dist)
 
-  @tf.function
+  @tf.function #(experimental_relax_shapes=True)
   def call(self, input_tensor, us_tensor, psis_tensor, dtype=tf.float32):
 
     #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
@@ -381,7 +381,7 @@ class ContinuousStateTransitionPsis(tf.keras.Model):
 
     # TODO: want different cov mats per dynamics model??
 
-  @tf.function
+  @tf.function #(experimental_relax_shapes=True)
   def call(self, input_tensor, us_tensor, psis_tensor, dtype=tf.float32):
 
     #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)
@@ -474,7 +474,7 @@ class ContinuousStateTransitionPsisZCond(tf.keras.Model):
 
     # TODO: want different cov mats per dynamics model??
 
-  @tf.function
+  @tf.function #(experimental_relax_shapes=True)
   def call(self, input_tensor, us_tensor, psis_tensor, dtype=tf.float32):
 
     #input_tensor = tf.convert_to_tensor(input_tensor, dtype_hint=dtype)

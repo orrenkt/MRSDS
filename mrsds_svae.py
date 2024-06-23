@@ -60,9 +60,14 @@ class MRSDS(tf.keras.Model):
     self.ux = ux
     self.psi_add = psi_add
 
-  def call(self, ys, us=None, masks=None, drop_idxs=None, num_samples=1,
-           dtype=tf.float32, do_batch=False, random_seed=0, xmean=False,
-           temperature=1.0, beta=1):
+  def call(self, ys, us=None, masks=None, drop_idxs=None,
+           #num_samples=tf.constant(1, dtype=tf.int32),
+           num_samples=1,
+           dtype=tf.float32, do_batch=False,
+           random_seed=131,
+           #random_seed=tf.constant(0, dtype=tf.int32),
+           xmean=False,
+           temperature=tf.constant(1.0), beta=tf.constant(1.0)):
     """
     Inference call of MRSDS.
 
@@ -95,7 +100,7 @@ class MRSDS(tf.keras.Model):
     tf.random.set_seed(random_seed)
     print('multistep')
     inputs, masks, time_masks = self._prep_inputs(ys, us, masks, dtype)
-    num_samples = tf.convert_to_tensor(num_samples, dtype_hint=tf.int32)
+    #num_samples = tf.convert_to_tensor(num_samples, dtype_hint=tf.int32)
     batch_size, num_steps = tf.unstack(tf.shape(inputs[0])[:2])
 
     print(inputs[0].shape, masks.shape)
@@ -127,7 +132,7 @@ class MRSDS(tf.keras.Model):
     start = time.time()
     ic = (psi_sampled[:,0,:], psi_entropy[:,0], psi_logprob[:,0])
     x_sampled, x_entropy, log_probs = self.rollout(num_steps, psi_sampled, ic, inputs[1],
-                                                   xmean=xmean)
+                                                   xmean=xmean, random_seed=random_seed)
     print('rollout time', time.time()-start)
 
     if masks is not None:
@@ -144,53 +149,21 @@ class MRSDS(tf.keras.Model):
     log_a = tf.zeros(1)
     start = time.time()
     log_px, xsample_prior, xmeans = self.compute_x_likelihood(x_sampled, inputs[1],
-                                                              time_masks)
+                                                              time_masks,
+                                                              random_seed=random_seed)
     print('xlik time', time.time()-start)
     logpx0 = tf.reduce_mean(log_px[:,0], axis=0)
     log_px = tf.reduce_sum(log_px, axis=-1)
     logpx_sum = tf.reduce_mean(log_px, axis=0)
 
     start = time.time()
-    # Compute 0-step emissions and likelihoods p(y[1:T] | xinf[1:T])
-    res = self.compute_y_likelihood(inputs_, x_sampled, time_masks, masks)
-    y_dist, log_py, log_py_cosmooth = res
-    log_py = tf.reduce_sum(log_py, axis=-1)
-    ys_recon = y_dist.mean()
-    if masks is not None:
-      ys_recon *= time_masks[:,:,tf.newaxis]
-
-    # 5 step overshoot
-    w = [0.6, 0.2, 0.1] #, 0.05, 0.05] # last # baseline for 4 step.
-    #w = [0.6, 0.2, 0.1, 0.05, 0.05] # last # baseline for 4 step.
-
-    #w = [0.35, 0.15, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.025, 0.025]
-
-    # 10 step overshoot (first timepoint is for inf)
-    #w = [0.35, 0.15, 0.1, 0.075, 0.075, 0.075, 0.05, 0.05, 0.025, 0.025, 0.025]
-    w = [0.45, 0.1, 0.1, 0.075, 0.075, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025]
-
-    # 15 step overshoot
-    #w = [0.3, 0.12, 0.1, 0.1, 0.07, 0.05, 0.05, 0.05, 0.025, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.015]
-
-    # 15 step overshoot focus on inf
-    #w = [0.6, 0.05, 0.05, 0.05, 0.025, 0.025, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
-
-    print('lxmeans', len(xmeans), len(w))
-    ys_recons = []
-    log_py_sum = log_py * w[0]
-    for i in range(len(w)-1):
-      res = self.compute_y_likelihood(inputs_, xmeans[i], time_masks, masks)
-      y_dist_, log_py_, log_py_cosmooth_ = res
-      #ys_recon_ = y_dist_.mean()
-      #if masks is not None:
-      #  ys_recon_ *= time_masks[:,:,tf.newaxis]
-      # NOTE not saving these for now.
-      #ys_recons.append(ys_recon_)
-      #log_pys.append(tf.reduce_sum(log_py_, axis=-1))
-      log_py_sum += tf.reduce_sum(log_py_, axis=-1) * w[1+i]
-
+    logpys, log_py_sum, ys_recon = self.compute_y_likelihood_overshoot(x_sampled, xmeans,
+                                                                       inputs_,
+                                                                       time_masks, masks)
+    log_py, log_py_cosmooth = logpys
     print('ylik time', time.time()-start)
 
+    print('shapes', log_px.shape, log_py_sum.shape)
     # Compute ELBO, complete data likelihood and entropy
     log_p_xy = 100*beta*logpx0 + beta*log_px + log_py_sum #log_py
     elbo, log_pxy1T, log_qx = self.compute_objective(x_entropy, log_p_xy)
@@ -260,8 +233,8 @@ class MRSDS(tf.keras.Model):
 
     return return_dict
 
-  @tf.function
-  def rollout(self, num_steps, psi_sampled, ic, us, random_seed=0,
+  @tf.function #(experimental_relax_shapes=True)
+  def rollout(self, num_steps, psi_sampled, ic, us, random_seed=131,
               xmean=False):
 
     zeros_ = tf.zeros_like(psi_sampled[:,0,:])
@@ -274,7 +247,7 @@ class MRSDS(tf.keras.Model):
     tas = [tf.TensorArray(tf.float32, num_steps, name=n) for n in ta_names]
     t0 = tf.constant(1, tf.int32)  # time/iter counter
     loopstate = namedtuple("LoopState", "x")
-    x0 = psi_sampled[:,0,:] + self.x0_dist.sample()
+    x0 = psi_sampled[:,0,:] + self.x0_dist.sample(seed=random_seed)
     psi0_entropy, psi0_logprob = ic[1:]
     ls = loopstate(x=x0)
     init_state = (t0, ls, tas)
@@ -350,7 +323,8 @@ class MRSDS(tf.keras.Model):
     elbo = log_p_xy + log_qx
     return elbo, log_p_xy, log_qx
 
-  def compute_x_likelihood(self, x_sampled, us, time_masks, xsample=False):
+  def compute_x_likelihood(self, x_sampled, us, time_masks, xsample=False,
+                           random_seed=131):
 
     # --- Compute log p(x[t] | x[t-1], z[t], u[t]) ---
 
@@ -360,7 +334,8 @@ class MRSDS(tf.keras.Model):
     log_prob_x0 = x0_dist.log_prob(x_sampled[:,:1,:])
 
     # log_prob_xt is of shape [batch_size, num_steps, num_states]
-    res = self.compute_x_transition_probs_multistep(x_sampled, log_prob_x0, us)
+    res = self.compute_x_transition_probs_multistep(x_sampled, log_prob_x0, us,
+                                                    random_seed=random_seed)
     log_prob_xt, xsample_prior, xmeans = res
     xt1_gen_dist = None
 
@@ -375,7 +350,9 @@ class MRSDS(tf.keras.Model):
 
     return log_prob_xt, xsample_prior, xmeans #xt1_gen_dist
 
-  def compute_x_transition_probs_multistep(self, x_sampled, log_prob_x0, us=None):
+  @tf.function
+  def compute_x_transition_probs_multistep(self, x_sampled, log_prob_x0, us=None,
+                                           random_seed=131):
     """
     p(x[t] | x[t-1], z[t]) transition.
     """
@@ -391,7 +368,7 @@ class MRSDS(tf.keras.Model):
     future_tensor = x_sampled[:,1:,:]
     start = time.time()
     dist = self.x_tran_time(xx,uu,psis,)
-    xsample = dist.sample()
+    xsample = dist.sample(seed=random_seed)
     log_probs = dist.log_prob(future_tensor)
 
     print('vec map xlik time', time.time()-start)
@@ -406,33 +383,110 @@ class MRSDS(tf.keras.Model):
     # 10 step overshoot
     w = [0.35, 0.15, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.025, 0.025]
 
+    w = tf.convert_to_tensor(w, dtype=tf.float32)
+
     # 15 step overshoot
     #w = [0.3, 0.125, 0.1, 0.1, 0.075, 0.05, 0.05, 0.05, 0.025, 0.025, 0.02, 0.02, 0.02, 0.02, 0.02]
 
     xmean_prev = xsample1[:,:-1,:]
-    xmeans = []
-    log_probs = []
-    xpred_dists = []
-    for l in range(1,len(w)+1):
+    num_steps = w.shape[0]
+    ta_names = ["xmeans", "log_probs"]
+    tas = [tf.TensorArray(tf.float32, num_steps, name=n) for n in ta_names]
+    t0 = tf.constant(1, tf.int32)  # time/iter counter
+    loopstate = namedtuple("LoopState", "xmean_prev")
+    ls = loopstate(xmean_prev=xmean_prev)
+    init_state = (t0, ls, tas)
 
-      xx = xmean_prev
+    def _cond(t, *unused_args):
+      return t < num_steps
+
+    def _step(t, loop_state, tas):
+      xx = loop_state.xmean_prev
       dist = self.x_tran_time(xx,uu,psis)
-      xsample_ = dist.sample()
+      xsample_ = dist.sample(seed=random_seed)
       log_probs_ = dist.log_prob(future_tensor)
-      log_prob_xt = tf.concat([log_prob_x0, log_probs_], axis=1)
+      log_prob_xt = tf.concat([log_prob_x0, log_probs_], axis=1) * w[t]
       xsample = tf.concat([x_sampled[:,:1,:], xsample_], axis=1)
       xmean_prev = xsample[:,:-1,:]
 
-      xmeans.append(xsample)
-      log_probs.append(log_prob_xt)
+      tas_updates = [xsample, log_prob_xt]
+      tas = write_updates_to_tas(tas, t, tas_updates)
+      ls = loopstate(xmean_prev=xmean_prev)
+      return (t+1, ls, tas)
+
+    _, _, tas_final = tf.while_loop(_cond, _step, init_state, parallel_iterations=1)
+    xmeans, log_probs = [tensor_for_ta(ta, swap_batch_time=False)
+                         for ta in tas_final[:]]
+    [_.close() for _ in tas]
+
+    print(xmeans.shape, log_probs.shape)
 
     # Average the log probs
-    log_prob_xt = log_prob_xt1*w[0]
-    for l in range(len(w)-1):
-      log_prob_xt += log_probs[l] * w[l+1]
+    log_prob_xt = log_prob_xt1*w[0] + tf.reduce_sum(log_probs, axis=0)
 
     print('xlik overshoot time', time.time()-start)
     return log_prob_xt, xsample1, xmeans
+
+  @tf.function
+  def compute_y_likelihood_overshoot(self, x_sampled, xmeans, inputs_,
+                                     time_masks, masks):
+
+    # Compute 0-step emissions and likelihoods p(y[1:T] | xinf[1:T])
+    res = self.compute_y_likelihood(inputs_, x_sampled, time_masks, masks)
+    y_dist, log_py, log_py_cosmooth = res
+    log_py = tf.reduce_sum(log_py, axis=-1)
+    ys_recon = y_dist.mean()
+    if masks is not None:
+      ys_recon *= time_masks[:,:,tf.newaxis]
+
+    # 5 step overshoot
+    w = [0.6, 0.2, 0.1] #, 0.05, 0.05] # last # baseline for 4 step.
+    #w = [0.6, 0.2, 0.1, 0.05, 0.05] # last # baseline for 4 step.
+
+    #w = [0.35, 0.15, 0.1, 0.1, 0.1, 0.05, 0.05, 0.05, 0.025, 0.025]
+
+    # 10 step overshoot (first timepoint is for inf)
+    #w = [0.35, 0.15, 0.1, 0.075, 0.075, 0.075, 0.05, 0.05, 0.025, 0.025, 0.025]
+    w = [0.45, 0.1, 0.1, 0.075, 0.075, 0.05, 0.05, 0.025, 0.025, 0.025, 0.025]
+
+    # 15 step overshoot
+    #w = [0.3, 0.12, 0.1, 0.1, 0.07, 0.05, 0.05, 0.05, 0.025, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.015]
+
+    # 15 step overshoot focus on inf
+    #w = [0.6, 0.05, 0.05, 0.05, 0.025, 0.025, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02, 0.02]
+
+    w = tf.convert_to_tensor(w, dtype=tf.float32)
+    num_steps = xmeans.shape[0]
+    ta_names = ["log_py_"]
+    tas = [tf.TensorArray(tf.float32, num_steps, name=n) for n in ta_names]
+    t0 = tf.constant(0, tf.int32)  # time/iter counter
+    loopstate = namedtuple("LoopState", "t")
+    ls = loopstate(t=t0)
+    init_state = (t0, ls, tas)
+
+    def _cond(t, *unused_args):
+      return t < num_steps
+
+    def _step(t, loop_state, tas):
+      res = self.compute_y_likelihood(inputs_, xmeans[t,:], time_masks, masks)
+      y_dist_, log_py_, log_py_cosmooth_ = res
+      log_py_ = tf.reduce_sum(log_py_,axis=-1) * w[t]
+      tas_updates = [log_py_]
+      tas = write_updates_to_tas(tas, t, tas_updates)
+      ls = loopstate(t=t)
+      return (t+1, ls, tas)
+
+    _, _, tas_final = tf.while_loop(_cond, _step, init_state, parallel_iterations=1)
+    log_pys_ = [tensor_for_ta(ta, swap_batch_time=False)
+                for ta in tas_final[:]]
+    [_.close() for _ in tas]
+
+    print('logpys', log_pys_[0].shape)
+
+    log_py_sum = log_py * w[0] + tf.reduce_sum(log_pys_[0], axis=0)
+
+    return (log_py, log_py_cosmooth), log_py_sum, ys_recon
+
 
   def compute_y_likelihood(self, inputs, x_sampled_gen1, time_masks=None, mask=None):
     """

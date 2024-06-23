@@ -63,7 +63,7 @@ inference:
 training:
   dynamics_only: False  # Continue training dynamics only
   smooth_coef: 0.1
-  batch_size: 64
+  batch_size: 128 #64
   xent: False 
   xent_init: 0
   xent_rate: 0.99
@@ -85,7 +85,7 @@ training:
   annealing_rate: 0.99
   annealing_steps: 500
   annealing_kickin_steps: 0
-  log_steps: 10 #0  # when to print elbo and eval perf
+  log_steps: 100 #0  # when to print elbo and eval perf
   save_steps: 100 #500 #0 # when to checkpoint model, save progress
   dropout: True
   test_perc: 0.1

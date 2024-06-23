@@ -11,24 +11,36 @@ os.environ['TF_CPP_MIN_VLOG_LEVEL'] = '0'
 os.environ['TF_PROFILER'] = '1'
 import tensorflow as tf
 tf.autograph.set_verbosity(0)
-
-import numpy as np
-import tensorflow as tf
-
 from tensorflow.python.profiler import trace
 
-# NOTE should set this up properally
-mrsds = imp.load_source('mrsds', './__init__.py')
-from mrsds.utils_config import load_yaml_config, get_configs, get_learning_rate_config
-from mrsds.utils_data import load_prep_data, construct_tf_datasets, construct_tf_datasets2
-from mrsds.utils_training import get_learning_rate, get_temperature, eval_perf, save_results2
-from mrsds.utils_training import train_step_modular_svae as train_step
+import numpy as np
 
 
-def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
-                 num_dims, mtype='mrsds', data_seed=0, model_seed=0,
-                 training_seed=0):
+def run_training(data_path, result_path, config_path, name, gpu_ids, num_states,
+                 num_dims, mtype='mrsds', data_seed=0, model_seed=0, training_seed=0):
   """Training function, to be called from command line. See example call script."""
+
+  #tf.get_logger().setLevel('INFO')
+  #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'  # Set log level to DEBUG
+  #tf.debugging.set_log_device_placement(True)
+
+  # Set GPU
+  os.environ['tf_data_private_threadpool.thread_limit'] = '100'
+  gpus = tf.config.list_physical_devices('GPU')
+  active_gpus = [gpus[i] for i in gpu_ids]
+  print(gpu_ids, active_gpus)
+  tf.config.experimental.set_visible_devices(active_gpus, 'GPU')
+  for gpu in active_gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+
+  # NOTE should set this up properally
+  mrsds = imp.load_source('mrsds', './__init__.py')
+
+  # Importing here since we want to set the GPUs first based on args
+  from mrsds.utils_config import load_yaml_config, get_configs, get_learning_rate_config
+  from mrsds.utils_data import load_prep_data, construct_tf_datasets, construct_tf_datasets2
+  from mrsds.utils_training import get_learning_rate, get_temperature, eval_perf, save_results2
+  from mrsds.utils_training import train_step_modular_svae as train_step
 
   # MRSDS is mean field inference model (single or switching dynamics)
   # SVAE is structured inference model (single dynamics)
@@ -44,25 +56,6 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
   svae = False
   if 'svae' in name:
     svae = True
-
-  #tf.get_logger().setLevel('INFO')
-  #os.environ['TF_CPP_MIN_LOG_LEVEL'] = '0'  # Set log level to DEBUG
-  #tf.debugging.set_log_device_placement(True)
-
-  # Set GPU
-  os.environ['tf_data_private_threadpool.thread_limit'] = '100'
-  tf.config.run_functions_eagerly(True)
-  gpus = tf.config.list_physical_devices('GPU')
-  tf.config.experimental.set_visible_devices(gpus[gpu_id], 'GPU')
-  tf.config.experimental.set_memory_growth(gpus[gpu_id], True)
-  tf.config.optimizer.set_jit(True)
-  #tf.config.run_functions_eagerly(False)
-
-  # NOTE single GPU by default. If model needs extra GPUs can manually set here
-  # Should change command line arg parsing to support multiple gpu ids.
-  #tf.config.experimental.set_visible_devices([gpus[gpu_id], gpus[7]], 'GPU')
-  #tf.config.experimental.set_memory_growth(gpus[gpu_id], True)
-  #tf.config.experimental.set_memory_growth(gpus[7], True)
 
   config = load_yaml_config(config_path)
   cfd = config.data
@@ -90,13 +83,13 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
   num_inputs = us_train[0].shape[1]
 
   # Number of batches per epoch
-  ds_repeats = 10
-  mask_multiple = 10
   num_train_trials = len(trial_lengths_train)
+  ds_repeats = int(cft.num_steps / int(num_train_trials / cft.batch_size))
+  mask_multiple = 10
   num_train_masks = num_train_trials*mask_multiple
   epoch_size = int(np.floor(num_train_trials*ds_repeats / cft.batch_size))
   #epoch_size = int(np.floor(num_train_trials / cft.batch_size))
-  print('Epoch size {}'.format(epoch_size))
+  print('Epoch size {}, ds repeats {}'.format(epoch_size, ds_repeats))
   inputs = [train_idxs, test_idxs, ys_train, us_train, ys_test,
             ys_test_cosmooth, us_test, masks_train, masks_test,
             region_sizes, 0, 0]
@@ -126,7 +119,7 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
                                                 **true_latents, **extra_args)
 
   train_dataset = train_dataset.shuffle(num_train_trials, reshuffle_each_iteration=True).repeat(ds_repeats)
-  train_masks = train_masks.shuffle(num_train_masks, reshuffle_each_iteration=True)
+  train_masks = train_masks.shuffle(num_train_masks, reshuffle_each_iteration=True).repeat(ds_repeats)
   train_iter = train_dataset.batch(cft.batch_size, drop_remainder=True).as_numpy_iterator()
   masks_iter = train_masks.batch(cft.batch_size, drop_remainder=True).as_numpy_iterator()
 
@@ -153,6 +146,7 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
   ## ----- Build model -----
 
   tf.config.run_functions_eagerly(False)
+  #tf.config.optimizer.set_jit(True)
 
   args = [num_regions, num_dims, region_sizes, trial_length]
   mrsds_model, x_transition_networks, _ = mrsds.build_model(model_dir, config_path, *args,
@@ -246,17 +240,19 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
 
   from contextlib import nullcontext
 
-  tf.profiler.experimental.start('/scratch/orrenk/profiling/')
-  print('started profiler')
+  #tf.profiler.experimental.start('/scratch/orrenk/profiling/')
+  #print('started profiler')
 
   import time
 
+  start1 = time.time()
+
   num_steps = cft.num_steps
-  while optimizer.iterations < 11: #num_steps:
+  while optimizer.iterations < 1500: #num_steps:
 
     start = time.time()
 
-    ss = True if optimizer.iterations > 5 else False
+    ss = False #True if optimizer.iterations > 5 else False
     with trace.Trace("TrainStep", step_num=optimizer.iterations, _r=1) if ss else nullcontext() as gs:
 
         # --- Batch setup ---
@@ -276,25 +272,30 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
         temperature = get_temperature(temperature_config, current_iter)
         if betas_anneal:
           beta = betas[current_iter]
-          beta = max(beta,1)
+          beta = max(beta,1.0)
         train_result = []  # Clear prev batch from memory
 
         iter_seed = training_seed + int(optimizer.iterations)
 
         train_result = train_step(batch_dict, mrsds_model, optimizer,
-                                  cft.num_samples, 0, objective, learning_rate, temperature,
+                                  cft.num_samples, 0, objective,
+                                  tf.constant(learning_rate), tf.constant(temperature),
                                   dynamics_only=dynamics_only, smooth_penalty=smooth_penalty,
-                                  smooth_coef=smooth_coef, random_seed=iter_seed, beta=beta)
+                                  smooth_coef=smooth_coef,
+                                  random_seed=tf.constant([iter_seed, iter_seed], dtype=tf.int32),
+                                  beta=tf.constant(beta))
         # Clear from memory
         batch = []
         batch_dict = []
+        print('train step time', time.time()-start)
 
-    if optimizer.iterations > 10:
+    if optimizer.iterations > 1000:
       print('done profiling')
+      print(time.time()-start1)
       #import time
-      time.sleep(5)
-      tf.profiler.experimental.stop()
-      time.sleep(5)
+      #time.sleep(5)
+      #tf.profiler.experimental.stop()
+      #time.sleep(5)
       raise ValueError("")
 
     # Reset iters and train dynamics only
@@ -326,9 +327,12 @@ def run_training(data_path, result_path, config_path, name, gpu_id, num_states,
 
     if (current_iter % cft.log_steps) == 0 or current_iter == 1:
 
+      # NOTE that test trial lengths is not same as batch size
+      # Should fix for optimizing graph mode
+
       # Evaluate model on train, test, cosmooth.
       res = eval_perf(mrsds_model, *eval_batches,
-                      trial_lengths_train[:ntrain_final],
+                      trial_lengths_train[:cft.batch_size],
                       trial_lengths_test, dropout_idxs)
 
       (train_final_result, test_result, cosmooth_result,
@@ -409,7 +413,7 @@ if __name__ == "__main__":
   parser.add_argument('-resultpath', type=str, required=True)
   parser.add_argument('-configpath', type=str, required=True)
   parser.add_argument('-name', type=str, required=True)
-  parser.add_argument('-gpu', type=int, required=True)
+  parser.add_argument('-gpu', nargs='+', type=int, required=True)
   parser.add_argument('-k', type=int, required=True)
   parser.add_argument('-d', type=int, required=True)
   parser.add_argument('-mtype', type=str, default='mrsds', required=False) # Only add if yes.
@@ -420,7 +424,7 @@ if __name__ == "__main__":
   print(args)
 
   run_training(data_path=args.datapath, result_path=args.resultpath,
-               config_path=args.configpath, name=args.name, gpu_id=args.gpu,
+               config_path=args.configpath, name=args.name, gpu_ids=args.gpu,
                num_states=args.k, num_dims=args.d, mtype=args.mtype,
                data_seed=args.dataseed, model_seed=args.modelseed,
                training_seed=args.trainseed)
