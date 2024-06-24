@@ -77,7 +77,7 @@ def run_training(data_path, result_path, config_path, name, gpu_ids, num_states,
            in os.listdir(data_path) if fname.endswith('.mat')]
 
   # NOTE Hard coding this for now, should first loop through data to get max sizes.
-  max_neurons = np.sum([312, 314, 389])
+  max_neurons = 907 #np.sum([312, 314, 389])
 
   all_region_sizes = []
   all_trial_lengths = []
