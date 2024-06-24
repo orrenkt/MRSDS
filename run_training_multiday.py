@@ -77,7 +77,8 @@ def run_training(data_path, result_path, config_path, name, gpu_ids, num_states,
            in os.listdir(data_path) if fname.endswith('.mat')]
 
   # NOTE Hard coding this for now, should first loop through data to get max sizes.
-  max_neurons = 907 #np.sum([312, 314, 389])
+  max_neurons = 500 #907 #np.sum([312, 314, 389])
+  maxlen = 185
 
   all_region_sizes = []
   all_trial_lengths = []
@@ -102,7 +103,7 @@ def run_training(data_path, result_path, config_path, name, gpu_ids, num_states,
     animal_id = np.array(animal_id).astype(np.int32)
 
     # Load dataset
-    ret = load_prep_data(cfd, cft, fpath, data_seed, max_neurons=max_neurons)
+    ret = load_prep_data(cfd, cft, fpath, data_seed, max_neurons=max_neurons, maxlen=maxlen)
     (num_regions, region_sizes, ys_train, us_train,
      ys_test, us_test, ys_test_cosmooth, dropout_idxs,
      trial_lengths_train, trial_lengths_test, train_idxs, test_idxs,
@@ -149,8 +150,8 @@ def run_training(data_path, result_path, config_path, name, gpu_ids, num_states,
                                                    random_seed=data_seed,
                                                    **true_latents, **extra_args)
 
-    train_dataset = train_dataset.shuffle(num_train_trials, reshuffle_each_iteration=True).repeat(ds_repeats).batch(cft.batch_size, drop_remainder=True)
-    train_masks = train_masks.shuffle(num_train_masks, reshuffle_each_iteration=True).repeat(ds_repeats).batch(cft.batch_size, drop_remainder=True)
+    train_dataset = train_dataset.shuffle(num_train_trials, reshuffle_each_iteration=True).repeat(-1).batch(cft.batch_size, drop_remainder=True)
+    train_masks = train_masks.shuffle(num_train_masks, reshuffle_each_iteration=True).repeat(-1).batch(cft.batch_size, drop_remainder=True)
 
     train_datasets.append(train_dataset)
     train_masks_datasets.append(train_masks)
@@ -309,7 +310,7 @@ def run_training(data_path, result_path, config_path, name, gpu_ids, num_states,
         if 'double-well' in cfd.data_source or 'lv' in cfd.data_source:
           batch = batch[2:] # Skip true xs and zs
         batch_dict = {'ys': batch[0], 'us': batch[1], 'masks': batch_masks[0],
-                      'animal_id': batch[3], 'day_id': batch[2]} #batch[2]}
+                      'animal_id': batch[3][0][0], 'day_id': batch[2][0][0]} #batch[2]}
 
         print(len(batch_masks))
         print('ss', batch[0].shape, batch_masks[0].shape, batch_masks[1].shape)

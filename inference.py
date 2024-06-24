@@ -475,7 +475,7 @@ def build_mr_embedding_net(region_sizes, seq_len, num_neurons, dense_layers, inp
   num_regions = len(region_sizes)
   ys = Input(shape=(seq_len, num_neurons,))
   diff = num_neurons - np.sum(region_sizes)
-  #print('diff', diff, num_neurons, np.sum(region_sizes))
+  print('diff', diff, num_neurons, np.sum(region_sizes))
   splits = region_sizes
   if diff > 0:
     splits = np.append(region_sizes, diff)
