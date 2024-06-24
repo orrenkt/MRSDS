@@ -61,12 +61,8 @@ class MRSDS(tf.keras.Model):
     self.psi_add = psi_add
 
   def call(self, ys, us=None, masks=None, drop_idxs=None,
-           #num_samples=tf.constant(1, dtype=tf.int32),
-           num_samples=1,
-           dtype=tf.float32, do_batch=False,
-           random_seed=131,
-           #random_seed=tf.constant(0, dtype=tf.int32),
-           xmean=False,
+           num_samples=1, dtype=tf.float32, do_batch=False,
+           random_seed=131, xmean=False, animal_id=0, day_id=0,
            temperature=tf.constant(1.0), beta=tf.constant(1.0)):
     """
     Inference call of MRSDS.
@@ -110,11 +106,10 @@ class MRSDS(tf.keras.Model):
 
     start = time.time()
     # Sample continuous latent x ~ q(x[1:T] | y[1:T])
-    psi_sampled, psi_entropy, psi_logprob = self.inference_net(inputs_masked,
-                                                               num_samples=num_samples,
-                                                               masks=time_masks,
-                                                               random_seed=random_seed,
-                                                               xmean=xmean)
+    ret = self.inference_net(inputs_masked, num_samples=num_samples,
+                             masks=time_masks, random_seed=random_seed,
+                             xmean=xmean, embed_id=day_id)
+    psi_sampled, psi_entropy, psi_logprob = ret
     print('inf net time', time.time()-start)
 
     # Merge batch_size and num_samples dimensions (typically samples=1).
@@ -127,6 +122,8 @@ class MRSDS(tf.keras.Model):
     if masks is not None:
       psi_sampled *= time_masks[:,:,tf.newaxis]
       psi_entropy *= time_masks[:,:]
+
+    # NOTE NEED TO PASS IN ANIMAL ETC TO XTRAN
 
     print('inf time', time.time()-start)
     start = time.time()
@@ -159,7 +156,8 @@ class MRSDS(tf.keras.Model):
     start = time.time()
     logpys, log_py_sum, ys_recon = self.compute_y_likelihood_overshoot(x_sampled, xmeans,
                                                                        inputs_,
-                                                                       time_masks, masks)
+                                                                       time_masks, masks,
+                                                                       embed_id=day_id)
     log_py, log_py_cosmooth = logpys
     print('ylik time', time.time()-start)
 
@@ -191,9 +189,9 @@ class MRSDS(tf.keras.Model):
       dx2 = dx[:,1:,:] - dx[:,:-1,:]
       dx3 = dx2[:,1:,:] - dx2[:,:-1,:]
       if time_masks is not None:
-        dx *= time_masks[:,1:]
-        dx2 *= time_masks[:,2:]
-        dx3 *= time_masks[:,3:]
+        dx *= time_masks[:,1:,tf.newaxis]
+        dx2 *= time_masks[:,2:,tf.newaxis]
+        dx3 *= time_masks[:,3:,tf.newaxis]
       diffs_norm1 = tf.reduce_mean(tf.reduce_sum(tf.math.abs(dx), axis=[-1,-2])) #used to be [-1 only, kept time dim?
       diffs_norm2 = tf.reduce_mean(tf.reduce_sum(tf.math.abs(dx2), axis=[-1,-2]))
       diffs_norm3 = tf.reduce_mean(tf.reduce_sum(tf.math.abs(dx3), axis=[-1,-2]))
@@ -202,7 +200,7 @@ class MRSDS(tf.keras.Model):
       return diffs_norm
 
     # Inf smoothness
-    diffs_norm = compute_smooth_penalty(tf.squeeze(x_sampled, axis=-2), time_masks)
+    diffs_norm = compute_smooth_penalty(tf.squeeze(x_sampled, axis=-2), time_masks=time_masks)
 
     log_gamma1 = tf.zeros(1)
     log_b = tf.zeros(1)
@@ -429,7 +427,7 @@ class MRSDS(tf.keras.Model):
 
   @tf.function
   def compute_y_likelihood_overshoot(self, x_sampled, xmeans, inputs_,
-                                     time_masks, masks):
+                                     time_masks, masks, embed_id=0):
 
     # Compute 0-step emissions and likelihoods p(y[1:T] | xinf[1:T])
     res = self.compute_y_likelihood(inputs_, x_sampled, time_masks, masks)
@@ -468,7 +466,8 @@ class MRSDS(tf.keras.Model):
       return t < num_steps
 
     def _step(t, loop_state, tas):
-      res = self.compute_y_likelihood(inputs_, xmeans[t,:], time_masks, masks)
+      res = self.compute_y_likelihood(inputs_, xmeans[t,:], time_masks, masks,
+                                      embed_id=embed_id)
       y_dist_, log_py_, log_py_cosmooth_ = res
       log_py_ = tf.reduce_sum(log_py_,axis=-1) * w[t]
       tas_updates = [log_py_]
@@ -487,8 +486,8 @@ class MRSDS(tf.keras.Model):
 
     return (log_py, log_py_cosmooth), log_py_sum, ys_recon
 
-
-  def compute_y_likelihood(self, inputs, x_sampled_gen1, time_masks=None, mask=None):
+  def compute_y_likelihood(self, inputs, x_sampled_gen1,
+                           time_masks=None, mask=None, embed_id=0):
     """
     """
     if len(inputs) == 2:
@@ -500,7 +499,7 @@ class MRSDS(tf.keras.Model):
 
     # --- Compute log p(y[t] | x[t]) ---
 
-    emission_dist = self.y_emit(x_sampled_gen1)
+    emission_dist = self.y_emit(x_sampled_gen1, embed_id=embed_id)
 
     # `emission_dist' is same shape as `ys', but could be smaller if padded neurons
     # `log_prob_yt' is [batch_size, num_steps]
@@ -533,7 +532,7 @@ class MRSDS(tf.keras.Model):
 
 
 def build_model(model_dir, config_path, num_regions, num_dims,
-                region_sizes, trial_length, num_states,
+                region_sizes, trial_length, num_states, max_neurons=None, num_days=1,
                 name='mrsds', psi_add=True, zcond=False, random_seed=0):
 
   print('build model svae multitep mv')
@@ -552,7 +551,6 @@ def build_model(model_dir, config_path, num_regions, num_dims,
   cfmxd = cfm.xtransition.dynamics
   latent_region_sizes = [num_dims] * num_regions
   hidden_dim = np.sum(latent_region_sizes)
-  num_neurons = np.sum(region_sizes)
   if hasattr(cfmxd, "single_region_latent"):
     if cfmxd.single_region_latent:
       latent_region_sizes = [num_dims*num_regions]
@@ -635,6 +633,10 @@ def build_model(model_dir, config_path, num_regions, num_dims,
   config_emission = get_distribution_config(trainable_cov=ce.trainable_cov,
                                             triangular_cov=ce.triangular_cov)
 
+  if hasattr(cfmxd, "single_region_latent"):
+    if cfmxd.single_region_latent:  # Still have multiregion emissions
+      latent_region_sizes = [num_dims] * num_regions
+
   # Note the final emission layer size depends on the region
   dense_layers = [ce.layers, ce.activations]
   nl = None
@@ -642,28 +644,34 @@ def build_model(model_dir, config_path, num_regions, num_dims,
     nl = tf.exp
   elif ce.final_activation == 'softplus':
     nl = tf.math.softplus
-  final_layers = [region_sizes, [nl]*num_regions]
-
-  if hasattr(cfmxd, "single_region_latent"):
-    if cfmxd.single_region_latent:  # Still have multiregion emissions
-      latent_region_sizes = [num_dims] * num_regions
-      print('sizes', region_sizes, latent_region_sizes)
-
   layer_reg = False
   if hasattr(ce, 'layer_reg'):
     layer_reg = ce.layer_reg
 
-  inputs = [latent_region_sizes, trial_length,
-            listzip(dense_layers), listzip(final_layers),
-            region_sizes, np.sum(region_sizes)]
-  emission_net = build_mr_emission_net(*inputs, xdropout=xdropout,
-                                       layer_reg=layer_reg)
+  if num_days > 1:
+    all_region_sizes = region_sizes
+  else:
+    all_region_sizes = [region_sizes]
+
+  num_neurons_max = max([np.sum(all_region_sizes[i])
+                         for i in range(num_days)])
+  print('maxneurons', num_neurons_max)
+  emission_nets = []
+  for i in range(num_days):
+    final_layers = [all_region_sizes[i], [nl]*num_regions]
+    inputs = [latent_region_sizes, trial_length,
+              listzip(dense_layers), listzip(final_layers),
+              all_region_sizes[i], np.sum(num_neurons_max)]
+    net = build_mr_emission_net(*inputs, xdropout=xdropout,
+                                layer_reg=layer_reg)
+    emission_nets.append(net)
+    print('sizes', i, all_region_sizes[i], latent_region_sizes)
 
   cfg_em = config_emission
   if ce.dist == "gaussian":
     emission_nets = GaussianEmissions(
-      emission_mean_nets=emission_net,
-      observation_dims=num_neurons,
+      emission_mean_nets=emission_nets,
+      observation_dims=num_neurons_max,
       use_triangular_cov=cfg_em.use_triangular_cov,
       use_trainable_cov=cfg_em.use_trainable_cov,
       raw_sigma_bias=cfg_em.raw_sigma_bias,
@@ -672,8 +680,8 @@ def build_model(model_dir, config_path, num_regions, num_dims,
       name=name+"_y_emit")
   elif ce.dist == "poisson":
     emission_nets = PoissonEmissions(
-      emission_rate_nets=emission_net,
-      observation_dims=num_neurons,
+      emission_rate_nets=emission_nets,
+      observation_dims=num_neurons_max,
       name=name+"_y_emit")
 
   # ----- Inference -----
@@ -683,9 +691,13 @@ def build_model(model_dir, config_path, num_regions, num_dims,
   input_len = cfd.inputs
   emb = cfi.embedding
   dense_layers = [emb.layers, emb.activations]
-  inputs = [region_sizes, trial_length,
-            num_neurons, listzip(dense_layers)]
-  embedding_net = build_mr_embedding_net(*inputs, input_len=input_len)
+
+  embedding_nets = []
+  for i in range(num_days):
+    inputs = [all_region_sizes[i], trial_length,
+              num_neurons_max, listzip(dense_layers)]
+    embedding_net = build_mr_embedding_net(*inputs, input_len=input_len)
+    embedding_nets.append(embedding_net)
 
   posterior_distribution = GaussianPosterior(
     nets=[tf.identity],
@@ -711,7 +723,7 @@ def build_model(model_dir, config_path, num_regions, num_dims,
   posterior_net = TransformerInferenceNetwork(
     transformer=transformer,
     posterior_dist=posterior_distribution,
-    latent_dims=hidden_dim, embedding_nets=embedding_net,
+    latent_dims=hidden_dim, embedding_nets=embedding_nets,
     )
 
   # ----- Build MRSDS model -----
@@ -727,7 +739,7 @@ def build_model(model_dir, config_path, num_regions, num_dims,
     num_inputs=num_inputs,
     ux=cfm.ux, psi_add=psi_add)
 
-  shapes = (cft.batch_size, trial_length, num_neurons)
+  shapes = (cft.batch_size, trial_length, num_neurons_max)
   mrsds_model.build(input_shape=shapes)
   summary = mrsds_model.summary()
   print(summary)

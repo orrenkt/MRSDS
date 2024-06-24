@@ -64,12 +64,19 @@ class TransformerInferenceNetwork(tf.keras.Model):
     latent_dims = self.latent_dims
     ys, us = inputs
 
-    # Pass ys through day specific input embedding net
-    # Returns list of embeddings per region
-    ys_embedding = tf.concat(self.embedding_nets[embed_id]([ys]), axis=-1)
+    # pass ys through day specific input embedding net
+    # returns list of embeddings per region, which get concatenated
+    embed_id = tf.convert_to_tensor(embed_id, dtype=tf.int32)
+    embeds = {i: lambda: self.embedding_nets[i]([ys]) for i
+              in range(len(self.embedding_nets))}
+    embed = tf.switch_case(embed_id, embeds)
+    ys_embedding = tf.concat(embed, axis=-1)
+
+    print('ys embed', ys_embedding.shape)
 
     # -- Pass through transformer --
 
+    # NOTE consider adding in animal and day id here too.
     # NOTE task ids will probably be missing time dim.
     h_inputs = [ys_embedding, us]
     hs = tf.concat(h_inputs, axis=-1)
@@ -140,9 +147,13 @@ class TransformerInferenceNetworkXZ(tf.keras.Model):
     latent_dims = self.latent_dims
     ys, us = inputs
 
-    # Pass ys through day specific input embedding net
-    # Returns list of embeddings per region
-    ys_embedding = tf.concat(self.embedding_nets[embed_id]([ys]), axis=-1)
+    # pass ys through day specific input embedding net
+    # returns list of embeddings per region, which get concatenated
+    embed_id = tf.convert_to_tensor(embed_id, dtype=tf.int32)
+    embeds = {i: lambda: self.embedding_nets[i]([ys]) for i
+              in range(len(self.embedding_nets))}
+    embed = tf.switch_case(embed_id, embeds)
+    ys_embedding = tf.concat(embed, axis=-1)
 
     # -- Pass through transformer --
     hs = tf.concat([ys_embedding, us], axis=-1)
@@ -464,6 +475,7 @@ def build_mr_embedding_net(region_sizes, seq_len, num_neurons, dense_layers, inp
   num_regions = len(region_sizes)
   ys = Input(shape=(seq_len, num_neurons,))
   diff = num_neurons - np.sum(region_sizes)
+  #print('diff', diff, num_neurons, np.sum(region_sizes))
   splits = region_sizes
   if diff > 0:
     splits = np.append(region_sizes, diff)

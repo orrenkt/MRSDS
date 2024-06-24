@@ -11,7 +11,7 @@ from mrsds.simulations import double_well as dw
 from mrsds.simulations import lotka_volterra as lv
 
 
-def load_prep_data(cfd, cft, data_path, data_seed=0, drop_region=None):
+def load_prep_data(cfd, cft, data_path, data_seed=0, drop_region=None, max_neurons=None):
 
   xs = zs = task_ids = None
   print('Loading', cfd.data_source)
@@ -60,6 +60,9 @@ def load_prep_data(cfd, cft, data_path, data_seed=0, drop_region=None):
   if xs is not None and zs is not None:
     true_latents = {'xs': xs, 'zs': zs, 'include_latents': True}
 
+  if max_neurons is None:
+    max_neurons = np.sum(region_sizes)
+
   # Pad data and split into train, test, dropout for cosmoothing
   ret = prep_pad_train_test_cosmooth(ys, us, region_sizes,
                                      dropout=cft.dropout,
@@ -67,7 +70,7 @@ def load_prep_data(cfd, cft, data_path, data_seed=0, drop_region=None):
                                      drop_perc=cft.drop_perc,
                                      random_seed=data_seed,
                                      maxlen=cfd.tlim,
-                                     max_neurons=np.sum(region_sizes),
+                                     max_neurons=max_neurons,
                                      **true_latents)
   return num_regions, region_sizes, *ret
 
@@ -557,8 +560,7 @@ def prep_pad_train_test_cosmooth(ys, us, region_sizes, test_perc=0.1, drop_perc=
   if max_neurons is None:
     max_neurons = np.sum(region_sizes)
   neurons_diff = max_neurons - np.sum(region_sizes)
-  print(maxlen, len(ys), ys[0].shape, neurons_diff, maxlen)
-  #if neurons_diff > 0:
+  print(maxlen, len(ys), ys[0].shape, neurons_diff, max_neurons)
   ys_padded = [np.pad(_, ((0,maxlen-_.shape[0]),(0,neurons_diff)),
                  'constant', constant_values=0) for _ in ys]
   us_padded = [np.pad(_, ((0,maxlen-_.shape[0]),(0,0)),
@@ -696,8 +698,8 @@ def construct_tf_datasets2(train_idxs, test_idxs, ys_train, us_train, ys_test,
 
   # Create zipped tf train dataset with all tensors. Batch later to combine with masks.
   datasets = [*train_latents]
-  day_ids = np.zeros([len(ys_train),1]).astype(int) + day_id
-  animal_ids = np.zeros([len(ys_train),1]).astype(int) + animal_id
+  day_ids = np.zeros([len(ys_train),1]).astype(np.int32) + day_id
+  animal_ids = np.zeros([len(ys_train),1]).astype(np.int32) + animal_id
   for array in (ys_train, us_train, day_ids, animal_ids, ys_history_train):
     datasets.append(np.asarray(array))
   train_dataset = tf.data.Dataset.from_tensor_slices(tuple(datasets))

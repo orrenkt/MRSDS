@@ -613,11 +613,18 @@ class GaussianEmissions(tf.keras.Model):
     batch_size, num_steps = tf.unstack(tf.shape(input_tensor)[:2])
     cond_id = tf.convert_to_tensor([cond_id], dtype_hint=dtype)
     cond_id_tensor = tf.zeros([batch_size, num_steps, 1], dtype=dtype) + cond_id
-    mean_tensor = self.y_emission_nets[embed_id]([input_tensor])
+    #mean_tensor = self.y_emission_nets[embed_id]([input_tensor])
+
+    embed_id = tf.convert_to_tensor(embed_id, dtype=tf.int32)
+    emits = {i: lambda: self.y_emission_nets[i]([input_tensor]) for i
+             in range(len(self.y_emission_nets))}
+    mean_tensor = tf.switch_case(embed_id, emits)
+    cov = tf.gather(self.cov_mats, embed_id)
+    #print('shapes', mean_tensor.shape, self.cov_mats[embed_id].shape)
     if self.use_triangular_cov:
-      _ = tfd.MultivariateNormalTriL(loc=mean_tensor, scale_tril=self.cov_mats[embed_id])
+      _ = tfd.MultivariateNormalTriL(loc=mean_tensor, scale_tril=cov)
     else:
-      _ = tfd.MultivariateNormalDiag(loc=mean_tensor, scale_diag=self.cov_mats[embed_id])
+      _ = tfd.MultivariateNormalDiag(loc=mean_tensor, scale_diag=cov)
     return tfp.experimental.as_composite(_)
 
   @property
@@ -1014,6 +1021,7 @@ def build_mr_emission_net(latent_region_sizes, seq_len, dense_layers, final_laye
 
   # Pad emissions if fewer neurons than multiday max
   diff = num_neurons - np.sum(region_sizes)
+  #print('diff', num_neurons, np.sum(region_sizes), diff)
   if diff > 0:
     # Transpose axes and back since zeropad func works on second to last dim
     ys = tf.transpose(ys, [0,2,1])
